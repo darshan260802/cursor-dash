@@ -57,7 +57,7 @@ export function PricingSettings() {
           </DialogDescription>
         </DialogHeader>
 
-        <div className="scrollbar-thin -mx-1 max-h-80 overflow-y-auto px-1">
+        <div className="scrollbar-thin -mx-1 max-h-[200px] overflow-y-auto px-1">
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-xs text-muted-foreground">

@@ -5,6 +5,7 @@ import { useTheme } from "@/lib/theme"
 import { useMeta } from "@/lib/api"
 import { formatRelativeTime } from "@/lib/format"
 import { PricingSettings } from "@/components/PricingSettings"
+import { AboutModal } from "@/components/AboutModal"
 
 const NAV = [
   { to: "/", label: "Overview", icon: Gauge, end: true },
@@ -63,6 +64,7 @@ export function Sidebar() {
           {theme === "dark" ? "Light mode" : "Dark mode"}
         </button>
         <PricingSettings />
+        <AboutModal />
       </div>
     </aside>
   )

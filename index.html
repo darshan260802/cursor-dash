@@ -7,12 +7,12 @@
     <meta name="color-scheme" content="dark light" />
     <title>Cursor Dash</title>
     <script>
-      // Applied before paint to avoid a flash of the wrong theme. Order of
-      // precedence: explicit user choice in localStorage, then OS preference,
-      // defaulting to dark (this dashboard is designed dark-first).
+      // Applied before paint to avoid a flash of the wrong theme. Dark is
+      // the default regardless of OS preference — only an explicit choice
+      // in localStorage (the in-app toggle) switches to light.
       (function () {
         var stored = localStorage.getItem('cursor-dash-theme')
-        var theme = stored || (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+        var theme = stored === 'light' ? 'light' : 'dark'
         document.documentElement.classList.toggle('dark', theme !== 'light')
         document.documentElement.dataset.theme = theme
       })()
