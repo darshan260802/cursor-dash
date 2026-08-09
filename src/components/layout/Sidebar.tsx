@@ -21,11 +21,9 @@ export function Sidebar() {
   const total = meta?.sourceHealth.length ?? 0
 
   return (
-    <aside className="flex h-full w-56 shrink-0 flex-col border-r border-border bg-sidebar 2xl:w-64">
+    <aside className="flex h-full w-56 shrink-0 flex-col border-r border-border 2xl:w-64">
       <div className="flex items-center gap-2 px-4 py-5">
-        <div className="flex size-7 items-center justify-center rounded-md bg-amber font-heading text-sm font-bold text-primary-foreground">
-          C
-        </div>
+        <img src="/logo.png" alt="" className="size-7 shrink-0 rounded-md object-cover" />
         <span className="font-heading text-base font-semibold tracking-tight">Cursor Dash</span>
       </div>
 
@@ -37,8 +35,8 @@ export function Sidebar() {
             end={end}
             className={({ isActive }) =>
               cn(
-                "flex items-center gap-2.5 rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground",
-                isActive && "bg-sidebar-accent text-foreground"
+                "flex items-center gap-2.5 rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
+                isActive && "bg-accent text-foreground"
               )
             }
           >
