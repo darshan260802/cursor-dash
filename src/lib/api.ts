@@ -158,6 +158,25 @@ export function useCloudSync() {
   })
 }
 
+interface PricingRefreshResult {
+  ok: boolean
+  updatedCount?: number
+  fetchedAt?: number
+  sourceUrl?: string
+  reason?: string
+  message?: string
+}
+
+/** Fetches and parses cursor.com's published model-pricing docs page and
+ * merges the rates into the pricing table (manual edits are preserved). */
+export function useRefreshPricingFromDocs() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => fetchJson<PricingRefreshResult>("/api/pricing/refresh", { method: "POST" }),
+    onSuccess: () => queryClient.invalidateQueries(),
+  })
+}
+
 export function sessionExportUrl(id: string, format: "json" | "md") {
   return `/api/sessions/${id}/export${qs({ format })}`
 }

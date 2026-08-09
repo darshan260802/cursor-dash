@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { Settings2, Loader2, CloudDownload } from "lucide-react"
+import { Settings2, Loader2, RefreshCw } from "lucide-react"
 import {
   Dialog,
   DialogContent,
@@ -12,14 +12,14 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { usePricing, useSetPricing, useCloudSync } from "@/lib/api"
+import { usePricing, useSetPricing, useRefreshPricingFromDocs } from "@/lib/api"
 import type { PricingModelEntry } from "@/lib/types"
 
 export function PricingSettings() {
   const [open, setOpen] = useState(false)
   const { data: pricing } = usePricing()
   const setPricing = useSetPricing()
-  const cloudSync = useCloudSync()
+  const refreshFromDocs = useRefreshPricingFromDocs()
   const [draft, setDraft] = useState<Record<string, PricingModelEntry>>({})
 
   useEffect(() => {
@@ -98,21 +98,32 @@ export function PricingSettings() {
 
         <div className="rounded-md border border-border bg-muted/40 p-3">
           <div className="flex items-center gap-2 text-xs font-medium">
-            <CloudDownload className="size-3.5 text-iris" /> Live usage sync (experimental)
+            <RefreshCw className="size-3.5 text-iris" /> Refresh from Cursor's pricing docs
           </div>
           <p className="mt-1 text-xs text-muted-foreground">
-            Optionally fetches your real spend from cursor.com using the auth token already stored locally by Cursor.
-            Off by default — start cursor-dash with <span className="num">--cloud</span> to enable, then click below.
-            This sends your local Cursor auth token to cursor.com.
+            Fetches{" "}
+            <a
+              href="https://cursor.com/docs/models-and-pricing"
+              target="_blank"
+              rel="noreferrer"
+              className="text-amber underline underline-offset-2"
+            >
+              cursor.com/docs/models-and-pricing
+            </a>{" "}
+            and parses the published per-model input/output rates into the table above, overwriting any rate you've
+            edited for a model it lists. This is a plain request to cursor.com with no account data, but it's
+            best-effort scraping of a docs page that can change layout without notice.
           </p>
           <div className="mt-2 flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={() => cloudSync.mutate()} disabled={cloudSync.isPending}>
-              {cloudSync.isPending && <Loader2 className="size-3 animate-spin" />}
-              Try sync
+            <Button variant="outline" size="sm" onClick={() => refreshFromDocs.mutate()} disabled={refreshFromDocs.isPending}>
+              {refreshFromDocs.isPending && <Loader2 className="size-3 animate-spin" />}
+              Refresh pricing
             </Button>
-            {cloudSync.data && (
+            {refreshFromDocs.data && (
               <span className="text-xs text-muted-foreground">
-                {cloudSync.data.ok ? "Synced." : `Unavailable (${cloudSync.data.reason}).`}
+                {refreshFromDocs.data.ok
+                  ? `Updated ${refreshFromDocs.data.updatedCount} models.`
+                  : `Unavailable (${refreshFromDocs.data.reason}).`}
               </span>
             )}
           </div>

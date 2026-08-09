@@ -26,7 +26,7 @@ export function Sidebar() {
         <div className="flex size-7 items-center justify-center rounded-md bg-amber font-heading text-sm font-bold text-primary-foreground">
           C
         </div>
-        <span className="font-heading text-base font-semibold tracking-tight">cursor-dash</span>
+        <span className="font-heading text-base font-semibold tracking-tight">Cursor Dash</span>
       </div>
 
       <nav className="flex flex-1 flex-col gap-0.5 px-2">

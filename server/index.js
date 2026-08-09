@@ -189,6 +189,11 @@ async function handleApi(req, res, { store, cloudEnabled, parts, query }) {
     return sendJson(res, 200, store.pricing)
   }
 
+  if (resource === 'pricing' && id === 'refresh' && req.method === 'POST') {
+    const result = await store.refreshPricingFromDocs()
+    return sendJson(res, result.ok ? 200 : 502, result)
+  }
+
   if (resource === 'cloud' && id === 'sync' && req.method === 'POST') {
     if (!cloudEnabled) return sendJson(res, 403, { ok: false, reason: 'cloud-sync-disabled' })
     const profile = store.profiles[0]

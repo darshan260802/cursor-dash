@@ -19,6 +19,7 @@ import { searchConversations } from './scan/search.js'
 import * as N from './normalize.js'
 import * as M from './metrics.js'
 import { applySessionFilters, paginate } from './filters.js'
+import { fetchLivePricing } from './priceScraper.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const defaultPricingPath = path.join(__dirname, 'pricing.json')
@@ -83,9 +84,40 @@ export class Store {
   }
 
   async setPricingOverride(models) {
+    const existing = loadJsonSafe(configFile, {})
+    // A manual edit always wins over whatever is already on disk.
+    const merged = { ...(existing.pricing?.models || {}), ...models }
+    await this._writePricingConfig(merged)
+  }
+
+  /** Best-effort refresh of per-model rates from Cursor's published pricing
+   * docs (see priceScraper.js). This is a deliberate overwrite: any model
+   * the docs page has a current rate for replaces whatever was there before
+   * — including a manually-typed value — since "refresh" is meant to pull
+   * in the latest published numbers as the new source of truth. Manually
+   * set rates for models the docs page doesn't list (or no longer lists)
+   * are left alone. */
+  async refreshPricingFromDocs() {
+    const result = await fetchLivePricing()
+    if (!result.ok) return result
+
+    const existing = loadJsonSafe(configFile, {})
+    const manualModels = existing.pricing?.models || {}
+    const merged = { ...manualModels, ...result.models }
+    await this._writePricingConfig(merged)
+
+    return {
+      ok: true,
+      updatedCount: Object.keys(result.models).length,
+      fetchedAt: result.fetchedAt,
+      sourceUrl: result.sourceUrl,
+    }
+  }
+
+  async _writePricingConfig(models) {
     fs.mkdirSync(configDir, { recursive: true })
     const existing = loadJsonSafe(configFile, {})
-    const next = { ...existing, pricing: { models: { ...(existing.pricing?.models || {}), ...models } } }
+    const next = { ...existing, pricing: { models } }
     fs.writeFileSync(configFile, JSON.stringify(next, null, 2))
     this.applyPricingOverride()
     // Cost is derived at enrich time and cached per-session keyed on the
