@@ -1,5 +1,5 @@
 {
-  "name": "cursor-dash",
+  "name": "@darshanpatel2608/cursor-dash",
   "description": "A local, read-only dashboard for your Cursor IDE session history — chats, tool calls, tokens, and cost — served from your own machine.",
   "private": false,
   "version": "0.1.0",
@@ -15,6 +15,14 @@
     "server",
     "dist"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/darshan260802/cursor-dash.git"
+  },
+  "homepage": "https://github.com/darshan260802/cursor-dash#readme",
+  "bugs": {
+    "url": "https://github.com/darshan260802/cursor-dash/issues"
+  },
   "keywords": [
     "cursor",
     "dashboard",

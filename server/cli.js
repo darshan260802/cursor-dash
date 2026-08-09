@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// Entry point for `npx cursor-dash`: builds the index, starts the local
+// Entry point for the `cursor-dash` bin (installed globally, or run via
+// `npx @darshanpatel2608/cursor-dash`): builds the index, starts the local
 // HTTP server, and opens the dashboard in the default browser.
 
 import path from 'node:path'
@@ -31,7 +32,8 @@ function printHelp() {
   console.log(`cursor-dash v${pkg.version}
 
 Usage:
-  npx cursor-dash [options]
+  cursor-dash [options]                        (after a global install)
+  npx @darshanpatel2608/cursor-dash [options]   (without installing)
 
 Options:
   -p, --port <n>     Port to listen on (default: 7788, auto-increments if taken)
