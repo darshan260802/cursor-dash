@@ -1,0 +1,72 @@
+{
+  "name": "cursor-dash",
+  "description": "A local, read-only dashboard for your Cursor IDE session history — chats, tool calls, tokens, and cost — served from your own machine.",
+  "private": false,
+  "version": "0.1.0",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "cursor-dash": "server/cli.js"
+  },
+  "files": [
+    "server",
+    "dist"
+  ],
+  "keywords": [
+    "cursor",
+    "dashboard",
+    "cli",
+    "analytics",
+    "local-first"
+  ],
+  "scripts": {
+    "dev": "vite",
+    "dev:server": "node server/cli.js --port 7788",
+    "build": "tsc -b && vite build",
+    "start": "node server/cli.js",
+    "lint": "oxlint",
+    "preview": "vite preview",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@base-ui/react": "^1.7.0",
+    "@fontsource-variable/bricolage-grotesque": "^5.2.7",
+    "@fontsource-variable/inter": "^5.3.0",
+    "@fontsource-variable/jetbrains-mono": "^5.2.7",
+    "@tailwindcss/vite": "^4.3.3",
+    "@tanstack/react-query": "^5.90.5",
+    "@tanstack/react-virtual": "^3.13.12",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "date-fns": "^4.1.0",
+    "lucide-react": "^1.31.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "react-markdown": "^10.1.0",
+    "react-router": "^7.9.6",
+    "recharts": "^3.2.1",
+    "remark-gfm": "^4.0.1",
+    "shadcn": "^4.16.2",
+    "shiki": "^3.9.2",
+    "sql.js": "^1.14.1",
+    "tailwind-merge": "^3.6.0",
+    "tailwindcss": "^4.3.3",
+    "tw-animate-css": "^1.4.0"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.29.7",
+    "@rolldown/plugin-babel": "^0.2.3",
+    "@types/babel__core": "^7.20.5",
+    "@types/node": "^24.13.3",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.4",
+    "babel-plugin-react-compiler": "^1.0.0",
+    "oxlint": "^1.75.0",
+    "typescript": "~6.0.2",
+    "vite": "^8.2.0"
+  }
+}

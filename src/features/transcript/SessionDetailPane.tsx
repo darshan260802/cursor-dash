@@ -1,0 +1,183 @@
+import { useMemo, useState } from "react"
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { ContextBar } from "@/components/ContextBar"
+import { StatTile } from "@/components/StatTile"
+import { MessageList } from "./MessageList"
+import { CodeBlock } from "./CodeBlock"
+import { useSession, useSessionMessages, useTranscriptOutcome, sessionExportUrl } from "@/lib/api"
+import { formatCost, formatDuration, formatNumber, formatTokens, pathBasename } from "@/lib/format"
+import { Download, FileText, ExternalLink, CheckSquare, Square, X } from "lucide-react"
+import { Link } from "react-router"
+import { EmptyState } from "@/components/EmptyState"
+
+export function SessionDetailPane({ id }: { id: string }) {
+  const { data: session, isLoading } = useSession(id)
+  const { data: messagesPage } = useSessionMessages(id)
+  const { data: outcome } = useTranscriptOutcome(id)
+  const [tab, setTab] = useState("transcript")
+
+  const toolCounts = useMemo(() => {
+    if (!messagesPage) return []
+    const map = new Map<string, { name: string; count: number; errorCount: number }>()
+    for (const m of messagesPage.items) {
+      for (const t of m.toolCalls) {
+        if (!map.has(t.name)) map.set(t.name, { name: t.name, count: 0, errorCount: 0 })
+        const e = map.get(t.name)!
+        e.count++
+        if (t.status === "error") e.errorCount++
+      }
+    }
+    return [...map.values()].sort((a, b) => b.count - a.count)
+  }, [messagesPage])
+
+  if (isLoading || !session) {
+    return (
+      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Loading session…</div>
+    )
+  }
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex items-start justify-between gap-3 border-b border-border px-4 py-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <Badge variant={session.mode === "agent" ? "amber" : "iris"}>{session.mode}</Badge>
+            {session.status && <Badge variant="outline">{session.status}</Badge>}
+            {outcome?.status === "error" && <Badge variant="coral">agent error</Badge>}
+          </div>
+          <h2 className="mt-1 truncate font-heading text-lg font-medium">{session.name || session.subtitle || "Untitled session"}</h2>
+          {session.workspacePath && (
+            <p className="truncate text-xs text-muted-foreground" title={session.workspacePath}>
+              {session.workspacePath}
+            </p>
+          )}
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <Link to={`/sessions`} className="lg:hidden">
+            <Button variant="ghost" size="icon-sm">
+              <X className="size-4" />
+            </Button>
+          </Link>
+          <a href={sessionExportUrl(id, "md")} download>
+            <Button variant="outline" size="sm">
+              <FileText className="size-3.5" /> .md
+            </Button>
+          </a>
+          <a href={sessionExportUrl(id, "json")} download>
+            <Button variant="outline" size="sm">
+              <Download className="size-3.5" /> .json
+            </Button>
+          </a>
+        </div>
+      </div>
+
+      <Tabs value={tab} onValueChange={(v) => setTab(String(v))} className="flex min-h-0 flex-1 flex-col gap-0">
+        <TabsList className="mx-4 mt-2 self-start" variant="line">
+          <TabsTrigger value="transcript">Transcript</TabsTrigger>
+          <TabsTrigger value="metrics">Metrics</TabsTrigger>
+          <TabsTrigger value="files">Files ({session.fileExtensions.length ? session.newlyCreatedFiles.length + session.filesTouched.length : 0})</TabsTrigger>
+          <TabsTrigger value="tools">Tools ({toolCounts.length})</TabsTrigger>
+          <TabsTrigger value="raw">Raw</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="transcript" className="min-h-0">
+          <MessageList messages={messagesPage?.items ?? []} />
+        </TabsContent>
+
+        <TabsContent value="metrics" className="scrollbar-thin min-h-0 overflow-y-auto px-4 py-4">
+          <div className="flex flex-col gap-6">
+            <ContextBar
+              categories={session.tokenBreakdown}
+              usagePercent={session.contextUsagePercent}
+              usedTokens={session.contextTokensUsed}
+              limitTokens={session.contextTokenLimit}
+              variant="full"
+            />
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+              <StatTile label="Tokens" value={formatTokens(session.tokens.total)} accent="amber" />
+              <StatTile label="Est. cost" value={formatCost(session.cost.usd, session.cost.unpricedTokens)} accent="mint" />
+              <StatTile label="Duration" value={formatDuration(session.durationMs)} />
+              <StatTile label="Tool calls" value={formatNumber(session.toolCallCount)} sub={`${session.toolCallErrorCount} errors`} accent="coral" />
+            </div>
+            {session.todos.length > 0 && (
+              <div>
+                <div className="mb-2 text-xs font-medium tracking-wide text-muted-foreground uppercase">Todos</div>
+                <ul className="flex flex-col gap-1.5">
+                  {session.todos.map((t) => (
+                    <li key={t.id} className="flex items-center gap-2 text-sm">
+                      {t.status === "completed" ? <CheckSquare className="size-3.5 text-mint" /> : <Square className="size-3.5 text-muted-foreground" />}
+                      <span className={t.status === "completed" ? "text-muted-foreground line-through" : ""}>{t.content}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        </TabsContent>
+
+        <TabsContent value="files" className="scrollbar-thin min-h-0 overflow-y-auto px-4 py-4">
+          <FilesTab session={session} />
+        </TabsContent>
+
+        <TabsContent value="tools" className="scrollbar-thin min-h-0 overflow-y-auto px-4 py-4">
+          {toolCounts.length === 0 ? (
+            <EmptyState title="No tool calls" description="This session didn't invoke any tools." />
+          ) : (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border text-left text-xs text-muted-foreground">
+                  <th className="pb-2 font-medium">Tool</th>
+                  <th className="pb-2 font-medium">Calls</th>
+                  <th className="pb-2 font-medium">Errors</th>
+                </tr>
+              </thead>
+              <tbody>
+                {toolCounts.map((t) => (
+                  <tr key={t.name} className="border-b border-border last:border-0">
+                    <td className="num py-1.5">{t.name}</td>
+                    <td className="num py-1.5">{t.count}</td>
+                    <td className="num py-1.5 text-coral">{t.errorCount || "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </TabsContent>
+
+        <TabsContent value="raw" className="scrollbar-thin min-h-0 overflow-y-auto px-4 py-4">
+          <CodeBlock code={JSON.stringify(session, null, 2)} lang="json" maxHeight={2000} />
+        </TabsContent>
+      </Tabs>
+    </div>
+  )
+}
+
+function FilesTab({ session }: { session: import("@/lib/types").SessionDetail }) {
+  const all = [
+    ...session.newlyCreatedFiles.map((f) => ({ path: f, created: true })),
+    ...session.filesTouched.filter((f) => !session.newlyCreatedFiles.includes(f)).map((f) => ({ path: f, created: false })),
+  ]
+  if (all.length === 0) {
+    return <EmptyState title="No files" description="This session didn't touch any files." />
+  }
+  return (
+    <ul className="flex flex-col gap-1">
+      {all.map((f) => (
+        <li key={f.path} className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm">
+          {f.created && (
+            <Badge variant="mint" className="text-[10px]">
+              new
+            </Badge>
+          )}
+          <span className="num min-w-0 flex-1 truncate" title={f.path}>
+            {pathBasename(f.path)}
+          </span>
+          <span className="truncate text-xs text-muted-foreground">{f.path}</span>
+          <ExternalLink className="size-3 shrink-0 text-muted-foreground" />
+        </li>
+      ))}
+    </ul>
+  )
+}

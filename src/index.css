@@ -1,0 +1,274 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/bricolage-grotesque";
+@import "@fontsource-variable/jetbrains-mono";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+    --font-heading: "Bricolage Grotesque Variable", var(--font-sans);
+    --font-sans: "Inter Variable", system-ui, sans-serif;
+    --font-mono: "JetBrains Mono Variable", ui-monospace, "SFMono-Regular", monospace;
+    --color-sidebar-ring: var(--sidebar-ring);
+    --color-sidebar-border: var(--sidebar-border);
+    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+    --color-sidebar-accent: var(--sidebar-accent);
+    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+    --color-sidebar-primary: var(--sidebar-primary);
+    --color-sidebar-foreground: var(--sidebar-foreground);
+    --color-sidebar: var(--sidebar);
+    --color-chart-5: var(--chart-5);
+    --color-chart-4: var(--chart-4);
+    --color-chart-3: var(--chart-3);
+    --color-chart-2: var(--chart-2);
+    --color-chart-1: var(--chart-1);
+    --color-ring: var(--ring);
+    --color-input: var(--input);
+    --color-border: var(--border);
+    --color-destructive: var(--destructive);
+    --color-accent-foreground: var(--accent-foreground);
+    --color-accent: var(--accent);
+    --color-muted-foreground: var(--muted-foreground);
+    --color-muted: var(--muted);
+    --color-secondary-foreground: var(--secondary-foreground);
+    --color-secondary: var(--secondary);
+    --color-primary-foreground: var(--primary-foreground);
+    --color-primary: var(--primary);
+    --color-popover-foreground: var(--popover-foreground);
+    --color-popover: var(--popover);
+    --color-card-foreground: var(--card-foreground);
+    --color-card: var(--card);
+    --color-foreground: var(--foreground);
+    --color-background: var(--background);
+    --color-mint: var(--mint);
+    --color-coral: var(--coral);
+    --color-iris: var(--iris);
+    --color-amber: var(--amber);
+    --radius-sm: calc(var(--radius) * 0.6);
+    --radius-md: calc(var(--radius) * 0.8);
+    --radius-lg: var(--radius);
+    --radius-xl: calc(var(--radius) * 1.4);
+    --radius-2xl: calc(var(--radius) * 1.8);
+    --radius-3xl: calc(var(--radius) * 2.2);
+    --radius-4xl: calc(var(--radius) * 2.6);
+    --font-serif: Georgia, serif;
+    --radius: 0.625rem;
+    --tracking-tighter: calc(var(--tracking-normal) - 0.05em);
+    --tracking-tight: calc(var(--tracking-normal) - 0.025em);
+    --tracking-wide: calc(var(--tracking-normal) + 0.025em);
+    --tracking-wider: calc(var(--tracking-normal) + 0.05em);
+    --tracking-widest: calc(var(--tracking-normal) + 0.1em);
+    --tracking-normal: var(--tracking-normal);
+    --shadow-2xl: var(--shadow-2xl);
+    --shadow-xl: var(--shadow-xl);
+    --shadow-lg: var(--shadow-lg);
+    --shadow-md: var(--shadow-md);
+    --shadow: var(--shadow);
+    --shadow-sm: var(--shadow-sm);
+    --shadow-xs: var(--shadow-xs);
+    --shadow-2xs: var(--shadow-2xs);
+    --spacing: var(--spacing);
+    --letter-spacing: var(--letter-spacing);
+    --shadow-offset-y: var(--shadow-offset-y);
+    --shadow-offset-x: var(--shadow-offset-x);
+    --shadow-spread: var(--shadow-spread);
+    --shadow-blur: var(--shadow-blur);
+    --shadow-opacity: var(--shadow-opacity);
+    --color-shadow-color: var(--shadow-color);
+    --color-destructive-foreground: var(--destructive-foreground);
+}
+
+/*
+  Token system. The dashboard is dark-first: `:root` on its own renders the
+  light (tone-mapped) variant, `.dark` is the primary designed palette. The
+  eight raw hues (--ink/--panel/--rule/--text/--muted/--amber/--mint/
+  --coral/--iris) are the ones components reach for directly — e.g. the
+  context-budget bar's category ramp — while the --color-* names above
+  exist for shadcn/ui component compatibility.
+*/
+:root {
+    --ink: #F5F3F8;
+    --panel: #FFFFFF;
+    --panel-raised: #FBFAFD;
+    --rule: #E4E0EC;
+    --text: #1D1A26;
+    --muted-text: #6B6478;
+    --amber: #C97B2E;
+    --mint: #24966E;
+    --coral: #C93E68;
+    --iris: #5B4FC0;
+
+    --background: var(--ink);
+    --foreground: var(--text);
+    --card: var(--panel);
+    --card-foreground: var(--text);
+    --popover: var(--panel);
+    --popover-foreground: var(--text);
+    --primary: var(--amber);
+    --primary-foreground: #FFFFFF;
+    --secondary: #ECE8F2;
+    --secondary-foreground: var(--text);
+    --muted: #EFEBF4;
+    --muted-foreground: var(--muted-text);
+    --accent: #E8E4F7;
+    --accent-foreground: var(--iris);
+    --destructive: var(--coral);
+    --destructive-foreground: #FFFFFF;
+    --border: var(--rule);
+    --input: var(--rule);
+    --ring: var(--amber);
+    --chart-1: var(--amber);
+    --chart-2: var(--mint);
+    --chart-3: var(--coral);
+    --chart-4: var(--iris);
+    --chart-5: #8B849C;
+    --sidebar: var(--panel);
+    --sidebar-foreground: var(--text);
+    --sidebar-primary: var(--amber);
+    --sidebar-primary-foreground: #FFFFFF;
+    --sidebar-accent: #ECE8F2;
+    --sidebar-accent-foreground: var(--text);
+    --sidebar-border: var(--rule);
+    --sidebar-ring: var(--amber);
+    --font-sans: "Inter Variable", system-ui, sans-serif;
+    --font-serif: Georgia, serif;
+    --font-mono: "JetBrains Mono Variable", ui-monospace, monospace;
+    --shadow-color: #14121A;
+    --shadow-opacity: 0.06;
+    --shadow-blur: 20px;
+    --shadow-spread: 0px;
+    --shadow-offset-x: 0px;
+    --shadow-offset-y: 8px;
+    --letter-spacing: -0.01em;
+    --spacing: 0.25rem;
+    --shadow-2xs: 0px 8px 20px 0px hsl(0 0% 0% / 0.03);
+    --shadow-xs: 0px 8px 20px 0px hsl(0 0% 0% / 0.03);
+    --shadow-sm: 0px 8px 20px 0px hsl(0 0% 0% / 0.05), 0px 1px 2px -1px hsl(0 0% 0% / 0.05);
+    --shadow: 0px 8px 20px 0px hsl(0 0% 0% / 0.05), 0px 1px 2px -1px hsl(0 0% 0% / 0.05);
+    --shadow-md: 0px 8px 20px 0px hsl(0 0% 0% / 0.05), 0px 2px 4px -1px hsl(0 0% 0% / 0.05);
+    --shadow-lg: 0px 8px 20px 0px hsl(0 0% 0% / 0.05), 0px 4px 6px -1px hsl(0 0% 0% / 0.05);
+    --shadow-xl: 0px 8px 20px 0px hsl(0 0% 0% / 0.05), 0px 8px 10px -1px hsl(0 0% 0% / 0.05);
+    --shadow-2xl: 0px 8px 20px 0px hsl(0 0% 0% / 0.13);
+    --tracking-normal: -0.01em;
+}
+
+.dark {
+    --ink: #14121A;
+    --panel: #1C1926;
+    --panel-raised: #221E2E;
+    --rule: #2A2635;
+    --text: #E8E4F0;
+    --muted-text: #8B849C;
+    --amber: #F2A65A;
+    --mint: #5FD3A6;
+    --coral: #F2668B;
+    --iris: #8B7FE8;
+
+    --background: var(--ink);
+    --foreground: var(--text);
+    --card: var(--panel);
+    --card-foreground: var(--text);
+    --popover: var(--panel);
+    --popover-foreground: var(--text);
+    --primary: var(--amber);
+    --primary-foreground: #1D1408;
+    --secondary: #241F30;
+    --secondary-foreground: var(--text);
+    --muted: #201C2A;
+    --muted-foreground: var(--muted-text);
+    --accent: #26213A;
+    --accent-foreground: var(--iris);
+    --destructive: var(--coral);
+    --destructive-foreground: #1D0A10;
+    --border: var(--rule);
+    --input: var(--rule);
+    --ring: var(--amber);
+    --chart-1: var(--amber);
+    --chart-2: var(--mint);
+    --chart-3: var(--coral);
+    --chart-4: var(--iris);
+    --chart-5: #8B849C;
+    --sidebar: #17141F;
+    --sidebar-foreground: var(--text);
+    --sidebar-primary: var(--amber);
+    --sidebar-primary-foreground: #1D1408;
+    --sidebar-accent: #241F30;
+    --sidebar-accent-foreground: var(--text);
+    --sidebar-border: var(--rule);
+    --sidebar-ring: var(--amber);
+    --font-sans: "Inter Variable", system-ui, sans-serif;
+    --font-serif: Georgia, serif;
+    --font-mono: "JetBrains Mono Variable", ui-monospace, monospace;
+    --shadow-color: #000000;
+    --shadow-opacity: 0.45;
+    --shadow-blur: 25px;
+    --shadow-spread: 0px;
+    --shadow-offset-x: 0px;
+    --shadow-offset-y: 10px;
+    --letter-spacing: -0.01em;
+    --spacing: 0.25rem;
+    --shadow-2xs: 0px 10px 25px 0px hsl(0 0% 0% / 0.20);
+    --shadow-xs: 0px 10px 25px 0px hsl(0 0% 0% / 0.20);
+    --shadow-sm: 0px 10px 25px 0px hsl(0 0% 0% / 0.40), 0px 1px 2px -1px hsl(0 0% 0% / 0.40);
+    --shadow: 0px 10px 25px 0px hsl(0 0% 0% / 0.40), 0px 1px 2px -1px hsl(0 0% 0% / 0.40);
+    --shadow-md: 0px 10px 25px 0px hsl(0 0% 0% / 0.40), 0px 2px 4px -1px hsl(0 0% 0% / 0.40);
+    --shadow-lg: 0px 10px 25px 0px hsl(0 0% 0% / 0.40), 0px 4px 6px -1px hsl(0 0% 0% / 0.40);
+    --shadow-xl: 0px 10px 25px 0px hsl(0 0% 0% / 0.40), 0px 8px 10px -1px hsl(0 0% 0% / 0.40);
+    --shadow-2xl: 0px 10px 25px 0px hsl(0 0% 0% / 1.00);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+    }
+  html {
+    @apply font-sans;
+    /* Gentle upscale between a laptop and a 1440p/4K desktop; caps rather
+       than scaling indefinitely so a 4K display gets breathing room, not
+       oversized type. */
+    font-size: clamp(15px, 0.75vw + 7.5px, 17px);
+    }
+  body {
+    @apply bg-background text-foreground;
+    letter-spacing: var(--tracking-normal);
+    font-variant-numeric: tabular-nums;
+    }
+  button:not(:disabled), [role="button"]:not(:disabled) {
+    cursor: pointer;
+    }
+  ::selection {
+    background: color-mix(in oklab, var(--amber) 35%, transparent);
+    }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.001ms !important;
+      scroll-behavior: auto !important;
+      }
+    }
+}
+
+@layer utilities {
+  .font-heading {
+    font-family: var(--font-heading);
+    }
+  .num {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    }
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: var(--rule) transparent;
+    }
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+    }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: var(--rule);
+    border-radius: 999px;
+    }
+}

@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark light" />
+    <title>cursor-dash</title>
+    <script>
+      // Applied before paint to avoid a flash of the wrong theme. Order of
+      // precedence: explicit user choice in localStorage, then OS preference,
+      // defaulting to dark (this dashboard is designed dark-first).
+      (function () {
+        var stored = localStorage.getItem('cursor-dash-theme')
+        var theme = stored || (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+        document.documentElement.classList.toggle('dark', theme !== 'light')
+        document.documentElement.dataset.theme = theme
+      })()
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
