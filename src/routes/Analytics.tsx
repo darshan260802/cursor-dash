@@ -17,6 +17,11 @@ const SERIES = [
 
 const CATEGORY_COLORS = ["var(--amber)", "var(--mint)", "var(--coral)", "var(--iris)", "#8B849C", "#C97B2E", "#5FD3A6", "#F2668B"]
 
+const UNIT_OPTIONS = [
+  { value: "day", label: "Daily" },
+  { value: "week", label: "Weekly" },
+]
+
 export default function Analytics() {
   const [unit, setUnit] = useState<"day" | "week">("day")
   const [metric, setMetric] = useState<(typeof SERIES)[number]["key"]>("tokens")
@@ -48,7 +53,7 @@ export default function Analytics() {
                 {s.label}
               </button>
             ))}
-            <Select value={unit} onValueChange={(v) => setUnit(v as "day" | "week")}>
+            <Select value={unit} onValueChange={(v) => setUnit(v as "day" | "week")} items={UNIT_OPTIONS}>
               <SelectTrigger size="sm" className="ml-auto h-7 text-xs">
                 <SelectValue />
               </SelectTrigger>

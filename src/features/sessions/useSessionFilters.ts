@@ -26,15 +26,34 @@ export function useSessionFilters() {
     return q
   }, [params])
 
+  function applyToParams(next: URLSearchParams, key: string, value: string | number | boolean | null | undefined) {
+    if (value === null || value === undefined || value === "" || value === false) {
+      next.delete(key)
+    } else {
+      next.set(key, value === true ? "1" : String(value))
+    }
+  }
+
   function setFilter(key: string, value: string | number | boolean | null | undefined) {
     setParams(
       (prev) => {
         const next = new URLSearchParams(prev)
-        if (value === null || value === undefined || value === "" || value === false) {
-          next.delete(key)
-        } else {
-          next.set(key, value === true ? "1" : String(value))
-        }
+        applyToParams(next, key, value)
+        return next
+      },
+      { replace: true }
+    )
+  }
+
+  /** Set several filters at once. Two `setFilter` calls back to back would
+   * each read the same pre-update `prev`, so the second call's result
+   * silently clobbers the first — this applies every change to one
+   * URLSearchParams before committing a single navigation. */
+  function setFilters(entries: Record<string, string | number | boolean | null | undefined>) {
+    setParams(
+      (prev) => {
+        const next = new URLSearchParams(prev)
+        for (const [key, value] of Object.entries(entries)) applyToParams(next, key, value)
         return next
       },
       { replace: true }
@@ -47,5 +66,5 @@ export function useSessionFilters() {
 
   const activeCount = Array.from(params.keys()).filter((k) => k !== "sort" && k !== "order").length
 
-  return { query, setFilter, clearAll, activeCount }
+  return { query, setFilter, setFilters, clearAll, activeCount }
 }

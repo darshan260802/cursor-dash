@@ -57,6 +57,26 @@ export function formatDuration(ms: number | null): string {
   return `${h}h ${m % 60}m`
 }
 
+/** Local-time YYYY-MM-DD for an <input type="date"> value — deliberately
+ * not toISOString(), which is UTC and can land on the wrong day. */
+export function toDateInputValue(ms: number | null): string {
+  if (!ms) return ""
+  const d = new Date(ms)
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, "0")
+  const day = String(d.getDate()).padStart(2, "0")
+  return `${y}-${m}-${day}`
+}
+
+/** Parses an <input type="date"> value as the start (00:00:00) or end
+ * (23:59:59.999) of that local day, so a date-range filter is inclusive. */
+export function dateInputToMs(value: string, bound: "start" | "end"): number | null {
+  if (!value) return null
+  const suffix = bound === "start" ? "T00:00:00" : "T23:59:59.999"
+  const ms = new Date(value + suffix).getTime()
+  return Number.isFinite(ms) ? ms : null
+}
+
 export function pathBasename(p: string | null): string | null {
   if (!p) return null
   const parts = p.split(/[\\/]/).filter(Boolean)
