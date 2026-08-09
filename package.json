@@ -1,34 +1,33 @@
 {
   "name": "@darshanpatel2608/cursor-dash",
-  "description": "A local, read-only dashboard for your Cursor IDE session history — chats, tool calls, tokens, and cost — served from your own machine.",
+  "version": "1.0.0",
   "private": false,
-  "version": "0.1.0",
-  "type": "module",
-  "license": "MIT",
-  "engines": {
-    "node": ">=20"
-  },
-  "bin": {
-    "cursor-dash": "server/cli.js"
-  },
-  "files": [
-    "server",
-    "dist"
-  ],
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/darshan260802/cursor-dash.git"
-  },
-  "homepage": "https://github.com/darshan260802/cursor-dash#readme",
-  "bugs": {
-    "url": "https://github.com/darshan260802/cursor-dash/issues"
-  },
+  "description": "A local, read-only dashboard for your Cursor IDE session history — chats, tool calls, tokens, and cost — served from your own machine.",
   "keywords": [
     "cursor",
     "dashboard",
     "cli",
     "analytics",
     "local-first"
+  ],
+  "homepage": "https://github.com/darshan260802/cursor-dash#readme",
+  "bugs": {
+    "url": "https://github.com/darshan260802/cursor-dash/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/darshan260802/cursor-dash.git"
+  },
+  "license": "MIT",
+  "author": "Darshan Patel",
+  "type": "module",
+  "main": "index.js",
+  "bin": {
+    "cursor-dash": "server/cli.js"
+  },
+  "files": [
+    "server",
+    "dist"
   ],
   "scripts": {
     "dev": "vite",
@@ -76,5 +75,8 @@
     "oxlint": "^1.75.0",
     "typescript": "~6.0.2",
     "vite": "^8.2.0"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }
