@@ -1,20 +1,34 @@
+import { useRef } from "react"
 import { Link } from "react-router"
+import { useGSAP } from "@gsap/react"
+import gsap from "gsap"
 import { AreaChart, Area, ResponsiveContainer, XAxis, Tooltip } from "recharts"
 import { useOverview, useSession, useSessions, useTimeline } from "@/lib/api"
 import { StatTile } from "@/components/StatTile"
 import { ContextBar } from "@/components/ContextBar"
 import { EmptyState } from "@/components/EmptyState"
+import { TickingNumber } from "@/components/TickingNumber"
 import { Badge } from "@/components/ui/badge"
 import { formatCost, formatNumber, formatRelativeTime, formatTokens } from "@/lib/format"
 import { PageHeader } from "@/components/layout/PageHeader"
 import { Sparkles } from "lucide-react"
+import { prefersReducedMotion } from "@/lib/motion"
 
 export default function Overview() {
   const { data: overview, isLoading } = useOverview()
   const { data: recent } = useSessions({ sort: "recency", order: "desc", limit: 8 })
   const { data: timeline } = useTimeline("day")
+  const statGridRef = useRef<HTMLDivElement>(null)
 
   const topSession = recent?.items[0]
+
+  useGSAP(
+    () => {
+      if (!statGridRef.current || prefersReducedMotion()) return
+      gsap.from(statGridRef.current.children, { opacity: 0, y: 10, duration: 0.35, stagger: 0.05, ease: "power2.out" })
+    },
+    { dependencies: [!isLoading && !!overview], revertOnUpdate: true }
+  )
 
   return (
     <div className="scrollbar-thin h-full overflow-y-auto">
@@ -29,13 +43,40 @@ export default function Overview() {
           />
         ) : (
           <>
-            <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-              <StatTile label="Sessions" value={formatNumber(overview?.sessionCount ?? 0)} sub={`${overview?.activeSessionCount ?? 0} with messages`} />
-              <StatTile label="Messages" value={formatNumber(overview?.messageCount ?? 0)} accent="iris" />
-              <StatTile label="Tokens" value={formatTokens(overview?.tokens.total ?? 0)} accent="amber" sub={`${formatTokens(overview?.tokens.estimated ?? 0)} estimated`} />
-              <StatTile label="Est. cost" value={formatCost(overview?.costUsd ?? 0, overview?.unpricedTokens)} accent="mint" sub={overview?.unpricedTokens ? `${formatTokens(overview.unpricedTokens)} tok unpriced` : "all priced"} />
-              <StatTile label="Lines changed" value={`+${formatNumber(overview?.linesAdded ?? 0)}`} sub={`-${formatNumber(overview?.linesRemoved ?? 0)}`} />
-              <StatTile label="Tool calls" value={formatNumber(overview?.toolCallCount ?? 0)} accent="coral" sub={`${overview?.toolCallErrorCount ?? 0} errors`} />
+            <div ref={statGridRef} className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+              <StatTile
+                label="Sessions"
+                value={<TickingNumber value={overview?.sessionCount ?? 0} format={formatNumber} />}
+                sub={`${overview?.activeSessionCount ?? 0} with messages`}
+              />
+              <StatTile
+                label="Messages"
+                value={<TickingNumber value={overview?.messageCount ?? 0} format={formatNumber} />}
+                accent="iris"
+              />
+              <StatTile
+                label="Tokens"
+                value={<TickingNumber value={overview?.tokens.total ?? 0} format={formatTokens} />}
+                accent="amber"
+                sub={`${formatTokens(overview?.tokens.estimated ?? 0)} estimated`}
+              />
+              <StatTile
+                label="Est. cost"
+                value={<TickingNumber value={overview?.costUsd ?? 0} format={(n) => formatCost(n, overview?.unpricedTokens)} />}
+                accent="mint"
+                sub={overview?.unpricedTokens ? `${formatTokens(overview.unpricedTokens)} tok unpriced` : "all priced"}
+              />
+              <StatTile
+                label="Lines changed"
+                value={<TickingNumber value={overview?.linesAdded ?? 0} format={(n) => `+${formatNumber(n)}`} />}
+                sub={`-${formatNumber(overview?.linesRemoved ?? 0)}`}
+              />
+              <StatTile
+                label="Tool calls"
+                value={<TickingNumber value={overview?.toolCallCount ?? 0} format={formatNumber} />}
+                accent="coral"
+                sub={`${overview?.toolCallErrorCount ?? 0} errors`}
+              />
             </div>
 
             {timeline && timeline.length > 1 && (

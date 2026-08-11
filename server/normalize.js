@@ -22,15 +22,189 @@ function pathBasename(p) {
   return parts[parts.length - 1] || p
 }
 
+function decodeFileUri(uri) {
+  if (typeof uri !== 'string') return null
+  return uri.startsWith('file://') ? decodeURIComponent(uri.replace(/^file:\/\//, '')) : uri
+}
+
+// Cursor's own tool identifiers (read_file_v2, edit_file_v2, …) group into
+// a small set of "kinds" the UI knows how to render richly. Matched by
+// substring so a tool name this codebase has never seen still classifies
+// sensibly instead of falling through unrecognized — and always falls back
+// to 'generic' (today's raw args/result view) rather than guessing wrong.
+const TOOL_KIND_PATTERNS = [
+  ['edit', /edit_file|write_file|create_file|apply_patch|delete_file|multi_edit/i],
+  ['terminal', /terminal|run_command|shell|execute_command|\bbash\b/i],
+  ['todo', /todo/i],
+  ['read', /read_file|read_lines|cat_file/i],
+  ['search', /search|glob|grep|list_dir|find_files/i],
+  ['web', /web_search|fetch_url|browser|url_fetch/i],
+]
+
+function classifyToolKind(name) {
+  const n = name || ''
+  for (const [kind, re] of TOOL_KIND_PATTERNS) {
+    if (re.test(n)) return kind
+  }
+  return 'generic'
+}
+
+function countDiffLines(hunks, type) {
+  return hunks.reduce((n, h) => n + (h.type === type ? 1 : 0), 0)
+}
+
+function buildEditDetail(params, result) {
+  const path =
+    decodeFileUri(params?.relativeWorkspacePath) ||
+    decodeFileUri(params?.targetFile) ||
+    decodeFileUri(params?.path) ||
+    null
+  return {
+    path,
+    // `hunks`/`added`/`removed` are filled in by the caller once
+    // `additionalData` (which carries the precomputed diff) is parsed —
+    // see normalizeToolCall below.
+    hunks: [],
+    added: null,
+    removed: null,
+    beforeContentId: result?.beforeContentId ?? null,
+    afterContentId: result?.afterContentId ?? null,
+  }
+}
+
+function buildTerminalDetail(params, result, additionalData) {
+  // Cursor stamps `startedAtMs` right when the call is issued (it turns
+  // out to predate the owning bubble's own `createdAt` by only ~1ms — that
+  // bubble is created at dispatch time, not completion), and records no
+  // completion time anywhere. A real duration is filled in by
+  // Store.refresh() from the gap to the *next* message instead — see
+  // `backfillToolDurations` in cache.js.
+  return {
+    command: params?.command ?? null,
+    cwd: params?.cwd || null,
+    output: typeof result?.output === 'string' ? result.output : null,
+    rejected: !!result?.rejected,
+    startedAtMs: additionalData?.startedAtMs ?? null,
+  }
+}
+
+function buildReadDetail(params, result) {
+  return {
+    path: decodeFileUri(params?.targetFile) || decodeFileUri(params?.path) || null,
+    offset: params?.offset ?? params?.startLine ?? null,
+    limit: params?.limit ?? null,
+    totalLinesInFile: result?.totalLinesInFile ?? null,
+  }
+}
+
+function buildSearchDetail(params, result) {
+  const pattern = params?.globPattern || params?.query || params?.pattern || params?.regex || null
+  const targetDirectory = decodeFileUri(params?.targetDirectory) || decodeFileUri(params?.path) || null
+  const files = (result?.directories || []).flatMap((d) => (d.files || []).map((f) => f.relPath).filter(Boolean))
+  const matches = files.length > 0 ? files : Array.isArray(result?.matches) ? result.matches : []
+  return {
+    pattern,
+    targetDirectory,
+    matchCount: matches.length,
+    matches: matches.slice(0, 200),
+  }
+}
+
+function buildTodoDetail(result) {
+  const todos = Array.isArray(result?.finalTodos) ? result.finalTodos : []
+  return {
+    todos: todos.map((t) => ({ id: t.id ?? null, content: t.content ?? '', status: t.status ?? 'pending' })),
+  }
+}
+
 export function normalizeToolCall(tf) {
   if (!tf) return null
+  const name = tf.name || tf.tool || 'unknown'
+  const kind = classifyToolKind(name)
+  const params = safeParseMaybeJson(tf.params)
+  const rawArgs = safeParseMaybeJson(tf.rawArgs)
+  const result = safeParseMaybeJson(tf.result)
+  const additionalData = safeParseMaybeJson(tf.additionalData)
+  const args = params ?? rawArgs ?? null
+
+  let detail = null
+  if (kind === 'edit') {
+    detail = buildEditDetail(params, result)
+    const diffLines = additionalData?.precomputedDiff?.lines
+    if (Array.isArray(diffLines)) {
+      detail.hunks = diffLines.map((l) => ({
+        type: l.type || 'unchanged',
+        content: l.content ?? '',
+        oldLine: l.originalLineNumber ?? null,
+        newLine: l.modifiedLineNumber ?? null,
+      }))
+      detail.added = countDiffLines(detail.hunks, 'added')
+      detail.removed = countDiffLines(detail.hunks, 'removed')
+    }
+  } else if (kind === 'terminal') {
+    detail = buildTerminalDetail(params, result, additionalData)
+  } else if (kind === 'read') {
+    detail = buildReadDetail(params, result)
+  } else if (kind === 'search') {
+    detail = buildSearchDetail(params, result)
+  } else if (kind === 'todo') {
+    detail = buildTodoDetail(result)
+  }
+
   return {
     id: tf.toolCallId ?? null,
-    name: tf.name || tf.tool || 'unknown',
+    name,
+    kind,
     status: tf.status || 'unknown',
-    args: safeParseMaybeJson(tf.params) ?? safeParseMaybeJson(tf.rawArgs) ?? null,
-    result: safeParseMaybeJson(tf.result),
+    startedAtMs: additionalData?.startedAtMs ?? null,
+    // Filled in by Store.refresh() from the gap to the next message —
+    // Cursor doesn't record a completion time on the tool call itself.
+    durationMs: null,
+    args,
+    result,
+    detail,
   }
+}
+
+const ATTACHMENT_CHANNELS = [
+  ['fileSelections', 'file'],
+  ['folderSelections', 'folder'],
+  ['selectedImages', 'image'],
+  ['selectedVideos', 'video'],
+  ['selectedDocuments', 'doc'],
+  ['selectedDocs', 'doc'],
+  ['selectedCommits', 'commit'],
+  ['selectedPullRequests', 'pull-request'],
+  ['gitPRDiffSelections', 'pull-request'],
+  ['cursorRules', 'rule'],
+  ['cursorCommands', 'command'],
+  ['terminalSelections', 'terminal'],
+  ['externalLinks', 'link'],
+  ['subagentSelections', 'subagent'],
+  ['browserSelections', 'browser'],
+]
+
+/** Cursor's attachment shapes aren't documented and this codebase has
+ * never observed most of these channels populated — extract best-effort
+ * so an unfamiliar shape degrades to a generic label instead of throwing. */
+function normalizeAttachments(context) {
+  if (!context || typeof context !== 'object') return []
+  const out = []
+  for (const [key, kind] of ATTACHMENT_CHANNELS) {
+    const list = context[key]
+    if (!Array.isArray(list)) continue
+    for (const item of list) {
+      if (item == null) continue
+      const path =
+        typeof item === 'object' ? decodeFileUri(item.uri?.path || item.uri?.external) || item.path || item.url || null : null
+      const label =
+        (typeof item === 'string' ? item : item.name || item.title || item.commitMessage || item.content || item.text) ||
+        (path ? pathBasename(path) : null) ||
+        kind
+      out.push({ kind, label, path })
+    }
+  }
+  return out
 }
 
 export function normalizeMessage(raw, { index, sessionId }) {
@@ -78,6 +252,24 @@ export function normalizeMessage(raw, { index, sessionId }) {
     error = parsed
   }
 
+  const thinking = raw.thinking?.text ? { text: raw.thinking.text, durationMs: raw.thinkingDurationMs || 0 } : null
+  const codeBlocks = (raw.codeBlocks || []).map((b) => ({
+    path: b.path ?? b.uri ?? null,
+    languageId: b.languageId ?? null,
+    content: b.content ?? null,
+  }))
+
+  // In practice a bubble carries exactly one of {thinking, text, tool call}
+  // — never a mix — but `blocks` renders in true sequence rather than the
+  // UI hardcoding an order, so a future bubble shape that *does* combine
+  // them (or a codeBlock alongside text) still renders correctly.
+  const blocks = []
+  if (thinking) blocks.push({ kind: 'thinking', text: thinking.text, durationMs: thinking.durationMs })
+  if (raw.text) blocks.push({ kind: 'text', text: raw.text })
+  for (const b of codeBlocks) if (b.content) blocks.push({ kind: 'code', ...b })
+  for (const t of toolCalls) blocks.push({ kind: 'tool', tool: t })
+  if (error) blocks.push({ kind: 'error', error })
+
   return {
     id: raw.bubbleId,
     sessionId,
@@ -85,15 +277,11 @@ export function normalizeMessage(raw, { index, sessionId }) {
     role: raw.type === 1 ? 'user' : 'assistant',
     createdAt: raw.createdAt || null,
     text: raw.text || '',
-    thinking: raw.thinking?.text
-      ? { text: raw.thinking.text, durationMs: raw.thinkingDurationMs || 0 }
-      : null,
+    thinking,
     toolCalls,
-    codeBlocks: (raw.codeBlocks || []).map((b) => ({
-      path: b.path ?? b.uri ?? null,
-      languageId: b.languageId ?? null,
-      content: b.content ?? null,
-    })),
+    codeBlocks,
+    blocks,
+    attachments: normalizeAttachments(raw.context),
     model: raw.modelInfo?.modelName || null,
     modelSource: raw.modelInfo?.modelName ? 'reported' : null,
     tokens: { input: inputTokens, output: outputTokens, source: tokenSource },
@@ -137,6 +325,16 @@ export function normalizeSessionSummary(header, workspaceIndex) {
   }
 }
 
+/** A queued prompt's shape isn't documented anywhere and this codebase has
+ * never observed a non-empty `queueItems` — normalize defensively so an
+ * unexpected shape degrades to an empty string rather than throwing. */
+function normalizeQueuedPrompt(item, i) {
+  if (item == null) return null
+  if (typeof item === 'string') return { id: String(i), text: item }
+  const text = typeof item.text === 'string' ? item.text : typeof item.richText === 'string' ? item.richText : ''
+  return { id: item.id ?? String(i), text }
+}
+
 export function normalizeSessionDetail(header, composerData, workspaceIndex) {
   const summary = normalizeSessionSummary(header, workspaceIndex)
   const cd = composerData || {}
@@ -167,11 +365,40 @@ export function normalizeSessionDetail(header, composerData, workspaceIndex) {
     newlyCreatedFiles: (cd.newlyCreatedFiles || [])
       .map((f) => f.uri?.path || (f.uri?.external ? decodeURIComponent(f.uri.external.replace(/^file:\/\//, '')) : null))
       .filter(Boolean),
-    filesTouched: Object.keys(cd.originalFileStates || {}).map((k) =>
-      k.startsWith('file://') ? decodeURIComponent(k.replace(/^file:\/\//, '')) : k
+    filesTouched: Object.keys(cd.originalFileStates || {}).map(decodeFileUri),
+    // Richer per-file state than `filesTouched` — the content-addressed key
+    // for the file's pre-edit snapshot (`ofsContent:…`) and whether Cursor
+    // created it fresh. Store.refresh() joins this against each session's
+    // edit-kind tool calls to build `fileChanges`.
+    originalFileStates: Object.fromEntries(
+      Object.entries(cd.originalFileStates || {}).map(([k, v]) => [
+        decodeFileUri(k),
+        {
+          contentKey: v?.contentKey || null,
+          isNewlyCreated: !!v?.isNewlyCreated,
+          firstEditBubbleId: v?.firstEditBubbleId || null,
+        },
+      ])
     ),
     messageHeaders,
     messageCount: messageHeaders.length,
+    // Live-session signals: a non-empty `generatingBubbleIds` (or, on some
+    // backends, `isContinuationInProgress`) is Cursor's own marker that a
+    // turn is actively running right now — it exposes this nowhere in the UI.
+    generatingBubbleIds: cd.generatingBubbleIds || [],
+    isContinuationInProgress: !!cd.isContinuationInProgress,
+    hasUnreadMessages: !!cd.hasUnreadMessages,
+    queuedPrompts: (cd.queueItems || []).map(normalizeQueuedPrompt).filter(Boolean),
+    attachments: normalizeAttachments(cd.context),
+    subagentIds: [...(cd.subComposerIds || []), ...(cd.subagentComposerIds || [])],
+    trackedGitRepos: (cd.trackedGitRepos || [])
+      .map((r) => (typeof r === 'string' ? r : r?.rootPath || r?.path || null))
+      .filter(Boolean),
+    activeCustomMode: cd.activeCustomMode || null,
+    forceMode: cd.forceMode || null,
+    addedFiles: cd.addedFiles || 0,
+    removedFiles: cd.removedFiles || 0,
+    newlyCreatedFolders: (cd.newlyCreatedFolders || []).map(decodeFileUri).filter(Boolean),
   }
 }
 

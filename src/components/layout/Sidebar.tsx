@@ -1,19 +1,11 @@
 import { NavLink } from "react-router"
-import { Gauge, MessagesSquare, BarChart3, Sparkles, FolderGit2, Moon, Sun, CircleDot } from "lucide-react"
+import { Moon, Sun, CircleDot } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useTheme } from "@/lib/theme"
 import { useMeta } from "@/lib/api"
-import { formatRelativeTime } from "@/lib/format"
+import { NAV } from "@/lib/nav"
 import { PricingSettings } from "@/components/PricingSettings"
 import { AboutModal } from "@/components/AboutModal"
-
-const NAV = [
-  { to: "/", label: "Overview", icon: Gauge, end: true },
-  { to: "/sessions", label: "Sessions", icon: MessagesSquare },
-  { to: "/analytics", label: "Analytics", icon: BarChart3 },
-  { to: "/code-authorship", label: "Code authorship", icon: Sparkles },
-  { to: "/workspaces", label: "Workspaces", icon: FolderGit2 },
-]
 
 export function Sidebar() {
   const { theme, toggle } = useTheme()
@@ -53,7 +45,6 @@ export function Sidebar() {
           <span className="num">
             {healthy}/{total} sources
           </span>
-          <span className="ml-auto num">{formatRelativeTime(meta?.lastRefreshedAt ?? null)}</span>
         </div>
         <button
           type="button"

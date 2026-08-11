@@ -1,8 +1,10 @@
 import { useQuery, useMutation, useQueryClient, type UseQueryOptions } from "@tanstack/react-query"
-import { useEffect } from "react"
+import { useEffect, useRef, useState } from "react"
 import type {
   AiTracking,
   ContextPressureEntry,
+  FileChange,
+  LiveState,
   Meta,
   ModelBreakdownEntry,
   Overview,
@@ -25,6 +27,12 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>
 }
 
+async function fetchText(url: string): Promise<string> {
+  const res = await fetch(url)
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+  return res.text()
+}
+
 function qs(params: Record<string, unknown> = {}) {
   const search = new URLSearchParams()
   for (const [key, value] of Object.entries(params)) {
@@ -35,18 +43,67 @@ function qs(params: Record<string, unknown> = {}) {
   return s ? `?${s}` : ""
 }
 
+export type LiveConnectionStatus = "connecting" | "connected" | "reconnecting"
+
 /** Subscribe to the server's change stream and invalidate all queries on
  * every event — the whole dataset is small enough that a blanket
- * invalidation is simpler and cheap enough vs. tracking fine-grained scope. */
+ * invalidation is simpler and cheap enough vs. tracking fine-grained scope.
+ * Reconnects with backoff on drop (dev-server restarts, sleep/wake, a
+ * proxy killing an idle connection) and reports honest connection status
+ * rather than silently going quiet. */
 export function useLiveUpdates() {
   const queryClient = useQueryClient()
+  const [status, setStatus] = useState<LiveConnectionStatus>("connecting")
+  const [lastEventAt, setLastEventAt] = useState<number | null>(null)
+  const queryClientRef = useRef(queryClient)
+  queryClientRef.current = queryClient
+
   useEffect(() => {
-    const source = new EventSource("/api/events")
-    source.addEventListener("change", () => {
-      queryClient.invalidateQueries()
-    })
-    return () => source.close()
-  }, [queryClient])
+    let source: EventSource | null = null
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+    let attempt = 0
+    let stopped = false
+
+    function connect() {
+      source = new EventSource("/api/events")
+      source.addEventListener("open", () => {
+        attempt = 0
+        setStatus("connected")
+      })
+      source.addEventListener("change", () => {
+        setLastEventAt(Date.now())
+        queryClientRef.current.invalidateQueries()
+      })
+      source.onerror = () => {
+        source?.close()
+        if (stopped) return
+        setStatus("reconnecting")
+        const delay = Math.min(1000 * 2 ** attempt, 15_000)
+        attempt += 1
+        reconnectTimer = setTimeout(connect, delay)
+      }
+    }
+
+    connect()
+    return () => {
+      stopped = true
+      source?.close()
+      if (reconnectTimer) clearTimeout(reconnectTimer)
+    }
+  }, [])
+
+  return { status, lastEventAt }
+}
+
+/** Manual "refresh now" — forces the server to re-snapshot and re-read
+ * everything rather than trusting mtime fingerprints, then invalidates
+ * every query so the UI reflects it immediately. */
+export function useRefreshAll() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => fetchJson<Meta>("/api/refresh", { method: "POST" }),
+    onSuccess: () => queryClient.invalidateQueries(),
+  })
 }
 
 type QOpts<T> = Omit<UseQueryOptions<T>, "queryKey" | "queryFn">
@@ -57,6 +114,17 @@ export function useMeta(opts?: QOpts<Meta>) {
 
 export function useOverview(opts?: QOpts<Overview>) {
   return useQuery({ queryKey: ["overview"], queryFn: () => fetchJson<Overview>("/api/overview"), ...opts })
+}
+
+/** The actively-generating session, if any — polls faster while something
+ * is running so the /live page and badges feel responsive, and backs off
+ * once it's idle. */
+export function useLiveState() {
+  return useQuery({
+    queryKey: ["live"],
+    queryFn: () => fetchJson<LiveState>("/api/live"),
+    refetchInterval: (query) => (query.state.data?.isGenerating ? 1500 : 8000),
+  })
 }
 
 // The list endpoint returns the same fully-enriched shape as a single
@@ -83,7 +151,9 @@ export function useSession(id: string | undefined, opts?: QOpts<SessionDetail>) 
 export function useSessionMessages(id: string | undefined, opts?: QOpts<Paginated<Message>>) {
   return useQuery({
     queryKey: ["session-messages", id],
-    queryFn: () => fetchJson<Paginated<Message>>(`/api/sessions/${id}/messages${qs({ limit: 5000 })}`),
+    // High enough that no real session gets truncated (matches the export
+    // endpoint's own limit) — see server/filters.js's paginate() maxLimit.
+    queryFn: () => fetchJson<Paginated<Message>>(`/api/sessions/${id}/messages${qs({ limit: 100_000 })}`),
     enabled: !!id,
     ...opts,
   })
@@ -94,6 +164,27 @@ export function useTranscriptOutcome(id: string | undefined) {
     queryKey: ["transcript-outcome", id],
     queryFn: () => fetchJson<{ status: string | null; error: string | null }>(`/api/sessions/${id}/transcript-outcome`),
     enabled: !!id,
+  })
+}
+
+export function useSessionFiles(id: string | undefined) {
+  return useQuery({
+    queryKey: ["session-files", id],
+    queryFn: () => fetchJson<FileChange[]>(`/api/sessions/${id}/files`),
+    enabled: !!id,
+  })
+}
+
+/** Lazily fetches one content-addressed blob (a full file body) for a
+ * session — used by "view full file" in the diff viewer. `key` is a
+ * `composer.content.<sha256>` or `ofsContent:…` id; pass undefined until
+ * the user actually asks to see it, since these can run to megabytes. */
+export function useSessionContent(id: string | undefined, key: string | null | undefined) {
+  return useQuery({
+    queryKey: ["session-content", id, key],
+    queryFn: () => fetchText(`/api/sessions/${id}/content${qs({ key })}`),
+    enabled: !!id && !!key,
+    staleTime: Infinity, // content at a fixed id never changes
   })
 }
 

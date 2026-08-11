@@ -4,7 +4,7 @@ import { useSessions } from "@/lib/api"
 import { useSessionFilters } from "@/features/sessions/useSessionFilters"
 import { SessionFilters } from "@/features/sessions/SessionFilters"
 import { SessionList } from "@/features/sessions/SessionList"
-import { SessionDetailPane } from "@/features/transcript/SessionDetailPane"
+import { SessionDetailPane } from "@/features/chat/SessionDetailPane"
 import { EmptyState } from "@/components/EmptyState"
 import { MousePointerClick } from "lucide-react"
 

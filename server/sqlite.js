@@ -48,24 +48,38 @@ function snapshotBase(file) {
 }
 
 /**
+ * Fingerprint `file` and its -wal/-shm siblings (mtime + size each, or
+ * `missing` when a sibling doesn't exist). Cursor runs SQLite in WAL mode,
+ * so a live write lands in `-wal` and leaves the main file's own
+ * mtime/size untouched until the next checkpoint — fingerprinting the main
+ * file alone means a freshly-written session never gets re-snapshotted.
+ */
+function siblingSignature(file) {
+  return ['', '-wal', '-shm'].map((suffix) => {
+    try {
+      const st = fs.statSync(file + suffix)
+      return `${st.mtimeMs}:${st.size}`
+    } catch {
+      return 'missing'
+    }
+  })
+}
+
+/**
  * Copy `file` (and its -wal/-shm siblings, if present) into the snapshot
- * dir when the source has changed since the last copy. Returns the
- * snapshot path, or null if the source doesn't exist.
+ * dir when the source (or either sibling) has changed since the last copy.
+ * Returns the snapshot path, or null if the source doesn't exist.
  */
 function ensureSnapshot(file) {
-  let srcStat
-  try {
-    srcStat = fs.statSync(file)
-  } catch {
-    return null
-  }
+  if (!exists(file)) return null
 
   const dest = snapshotBase(file)
   const metaFile = dest + '.meta.json'
+  const signature = siblingSignature(file)
   let fresh = false
   try {
     const meta = JSON.parse(fs.readFileSync(metaFile, 'utf8'))
-    fresh = meta.mtimeMs === srcStat.mtimeMs && meta.size === srcStat.size
+    fresh = Array.isArray(meta.signature) && meta.signature.join('|') === signature.join('|')
   } catch {
     fresh = false
   }
@@ -84,10 +98,31 @@ function ensureSnapshot(file) {
         }
       }
     }
-    fs.writeFileSync(metaFile, JSON.stringify({ mtimeMs: srcStat.mtimeMs, size: srcStat.size }))
+    fs.writeFileSync(metaFile, JSON.stringify({ signature }))
   }
 
   return dest
+}
+
+function exists(file) {
+  try {
+    fs.statSync(file)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Force the next open of `file` to re-copy its snapshot, regardless of
+ * signature. Used by the manual refresh endpoint so a user-triggered
+ * refresh is never short-circuited by a stale-but-matching fingerprint. */
+export function invalidateSnapshot(file) {
+  const metaFile = snapshotBase(file) + '.meta.json'
+  try {
+    fs.unlinkSync(metaFile)
+  } catch {
+    /* nothing cached yet */
+  }
 }
 
 function wrapNodeSqlite(db, sourcePath) {

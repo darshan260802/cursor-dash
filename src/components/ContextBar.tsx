@@ -58,7 +58,11 @@ export function ContextBar({
         {hasData && (
           <div className="flex h-full w-full">
             {segments.map((s) => (
-              <div key={s.id} style={{ width: `${s.widthPct}%`, background: s.color }} className="h-full" />
+              <div
+                key={s.id}
+                style={{ width: `${s.widthPct}%`, background: s.color }}
+                className="h-full transition-[width] duration-500 ease-out"
+              />
             ))}
           </div>
         )}
@@ -80,7 +84,7 @@ export function ContextBar({
                 <div
                   key={s.id}
                   style={{ width: `${s.widthPct}%`, background: s.color }}
-                  className="h-full"
+                  className="h-full transition-[width] duration-500 ease-out"
                   title={`${s.label}: ${formatTokens(s.estimatedTokens)} tok`}
                 />
               ))}
@@ -109,7 +113,11 @@ export function ContextBar({
         {hasData && (
           <div className="flex h-full w-full">
             {segments.map((s) => (
-              <div key={s.id} style={{ width: `${s.widthPct}%`, background: s.color }} className="h-full first:rounded-l-full" />
+              <div
+                key={s.id}
+                style={{ width: `${s.widthPct}%`, background: s.color }}
+                className="h-full transition-[width] duration-500 ease-out first:rounded-l-full"
+              />
             ))}
           </div>
         )}

@@ -67,6 +67,35 @@ export function normalizeLang(lang: string | null | undefined): string {
   return "text"
 }
 
+const EXT_TO_LANG: Record<string, string> = {
+  ts: "typescript",
+  tsx: "tsx",
+  js: "javascript",
+  mjs: "javascript",
+  cjs: "javascript",
+  jsx: "jsx",
+  json: "json",
+  py: "python",
+  sh: "bash",
+  bash: "bash",
+  zsh: "bash",
+  css: "css",
+  html: "html",
+  md: "markdown",
+  mdx: "markdown",
+  sql: "sql",
+  yaml: "yaml",
+  yml: "yaml",
+}
+
+/** File path -> Shiki lang id, for tool cards that only have a path (a
+ * diff, a read, a full-file view) and no explicit `languageId`. */
+export function langFromPath(path: string | null | undefined): string {
+  if (!path) return "text"
+  const ext = path.split(".").pop()?.toLowerCase()
+  return (ext && EXT_TO_LANG[ext]) || "text"
+}
+
 export async function highlightCode(code: string, lang: string | null | undefined, theme: "dark" | "light"): Promise<string> {
   const normalized = normalizeLang(lang)
   const shikiTheme = theme === "dark" ? "github-dark" : "github-light"

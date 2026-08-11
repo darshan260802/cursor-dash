@@ -4,11 +4,14 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { ContextBar } from "@/components/ContextBar"
 import { StatTile } from "@/components/StatTile"
-import { MessageList } from "./MessageList"
+import { LiveBadge } from "@/components/LiveBadge"
+import { ChatView } from "./ChatView"
+import { ChangesTab } from "./ChangesTab"
+import { ContextTab } from "./ContextTab"
 import { CodeBlock } from "./CodeBlock"
-import { useSession, useSessionMessages, useTranscriptOutcome, sessionExportUrl } from "@/lib/api"
-import { formatCost, formatDuration, formatNumber, formatTokens, pathBasename } from "@/lib/format"
-import { Download, FileText, ExternalLink, CheckSquare, Square, X } from "lucide-react"
+import { useLiveState, useSession, useSessionMessages, useTranscriptOutcome, sessionExportUrl } from "@/lib/api"
+import { formatCost, formatDuration, formatNumber, formatTokens } from "@/lib/format"
+import { Download, FileText, CheckSquare, Square, X } from "lucide-react"
 import { Link } from "react-router"
 import { EmptyState } from "@/components/EmptyState"
 
@@ -16,7 +19,9 @@ export function SessionDetailPane({ id }: { id: string }) {
   const { data: session, isLoading } = useSession(id)
   const { data: messagesPage } = useSessionMessages(id)
   const { data: outcome } = useTranscriptOutcome(id)
-  const [tab, setTab] = useState("transcript")
+  const { data: live } = useLiveState()
+  const isLive = live?.isGenerating && live.sessionId === id
+  const [tab, setTab] = useState("chat")
 
   const toolCounts = useMemo(() => {
     if (!messagesPage) return []
@@ -46,6 +51,7 @@ export function SessionDetailPane({ id }: { id: string }) {
             <Badge variant={session.mode === "agent" ? "amber" : "iris"}>{session.mode}</Badge>
             {session.status && <Badge variant="outline">{session.status}</Badge>}
             {outcome?.status === "error" && <Badge variant="coral">agent error</Badge>}
+            {isLive && <LiveBadge />}
           </div>
           <h2 className="mt-1 truncate font-heading text-lg font-medium">{session.name || session.subtitle || "Untitled session"}</h2>
           {session.workspacePath && (
@@ -75,15 +81,20 @@ export function SessionDetailPane({ id }: { id: string }) {
 
       <Tabs value={tab} onValueChange={(v) => setTab(String(v))} className="flex min-h-0 flex-1 flex-col gap-0">
         <TabsList className="mx-4 mt-2 self-start" variant="line">
-          <TabsTrigger value="transcript">Transcript</TabsTrigger>
+          <TabsTrigger value="chat">Chat</TabsTrigger>
+          <TabsTrigger value="changes">Changes ({session.fileChanges.length})</TabsTrigger>
           <TabsTrigger value="metrics">Metrics</TabsTrigger>
-          <TabsTrigger value="files">Files ({session.fileExtensions.length ? session.newlyCreatedFiles.length + session.filesTouched.length : 0})</TabsTrigger>
+          <TabsTrigger value="context">Context</TabsTrigger>
           <TabsTrigger value="tools">Tools ({toolCounts.length})</TabsTrigger>
           <TabsTrigger value="raw">Raw</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="transcript" className="min-h-0">
-          <MessageList messages={messagesPage?.items ?? []} />
+        <TabsContent value="chat" className="min-h-0">
+          <ChatView key={id} messages={messagesPage?.items ?? []} />
+        </TabsContent>
+
+        <TabsContent value="changes" className="scrollbar-thin min-h-0 overflow-y-auto px-4 py-4">
+          <ChangesTab sessionId={id} />
         </TabsContent>
 
         <TabsContent value="metrics" className="scrollbar-thin min-h-0 overflow-y-auto px-4 py-4">
@@ -117,8 +128,8 @@ export function SessionDetailPane({ id }: { id: string }) {
           </div>
         </TabsContent>
 
-        <TabsContent value="files" className="scrollbar-thin min-h-0 overflow-y-auto px-4 py-4">
-          <FilesTab session={session} />
+        <TabsContent value="context" className="scrollbar-thin min-h-0 overflow-y-auto px-4 py-4">
+          <ContextTab session={session} />
         </TabsContent>
 
         <TabsContent value="tools" className="scrollbar-thin min-h-0 overflow-y-auto px-4 py-4">
@@ -151,33 +162,5 @@ export function SessionDetailPane({ id }: { id: string }) {
         </TabsContent>
       </Tabs>
     </div>
-  )
-}
-
-function FilesTab({ session }: { session: import("@/lib/types").SessionDetail }) {
-  const all = [
-    ...session.newlyCreatedFiles.map((f) => ({ path: f, created: true })),
-    ...session.filesTouched.filter((f) => !session.newlyCreatedFiles.includes(f)).map((f) => ({ path: f, created: false })),
-  ]
-  if (all.length === 0) {
-    return <EmptyState title="No files" description="This session didn't touch any files." />
-  }
-  return (
-    <ul className="flex flex-col gap-1">
-      {all.map((f) => (
-        <li key={f.path} className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm">
-          {f.created && (
-            <Badge variant="mint" className="text-[10px]">
-              new
-            </Badge>
-          )}
-          <span className="num min-w-0 flex-1 truncate" title={f.path}>
-            {pathBasename(f.path)}
-          </span>
-          <span className="truncate text-xs text-muted-foreground">{f.path}</span>
-          <ExternalLink className="size-3 shrink-0 text-muted-foreground" />
-        </li>
-      ))}
-    </ul>
   )
 }

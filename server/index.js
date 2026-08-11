@@ -32,6 +32,9 @@ function sendJson(res, status, data) {
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
     'Content-Length': Buffer.byteLength(body),
+    // The whole point of this app is showing current data — never let a
+    // browser or intermediary cache an /api response.
+    'Cache-Control': 'no-store',
   })
   res.end(body)
 }
@@ -68,6 +71,20 @@ export function createServer(store, { cloudEnabled = false } = {}) {
     }
   })
 
+  // Keeps the connection alive through proxies/dev servers that silently
+  // drop an idle SSE stream (the Vite dev proxy among them), and gives the
+  // client a beat to detect a dead connection and reconnect.
+  const heartbeat = setInterval(() => {
+    for (const res of sseClients) {
+      try {
+        res.write(': ping\n\n')
+      } catch {
+        /* client likely disconnected; will be cleaned up below */
+      }
+    }
+  }, 20_000)
+  heartbeat.unref()
+
   const server = http.createServer(async (req, res) => {
     if (!isLoopbackHost(req.headers.host)) {
       sendText(res, 403, 'Forbidden: cursor-dash only accepts loopback requests.')
@@ -103,7 +120,10 @@ export function createServer(store, { cloudEnabled = false } = {}) {
     }
   })
 
-  server.on('close', stopEmitter)
+  server.on('close', () => {
+    stopEmitter()
+    clearInterval(heartbeat)
+  })
   return server
 }
 
@@ -115,8 +135,17 @@ async function handleApi(req, res, { store, cloudEnabled, parts, query }) {
     return sendJson(res, 200, store.getMeta())
   }
 
+  if (resource === 'refresh' && req.method === 'POST') {
+    await store.forceRefresh()
+    return sendJson(res, 200, store.getMeta())
+  }
+
   if (resource === 'overview' && req.method === 'GET') {
     return sendJson(res, 200, store.getOverview())
+  }
+
+  if (resource === 'live' && req.method === 'GET') {
+    return sendJson(res, 200, store.getLiveState())
   }
 
   if (resource === 'sessions' && req.method === 'GET' && !id) {
@@ -137,6 +166,19 @@ async function handleApi(req, res, { store, cloudEnabled, parts, query }) {
 
   if (resource === 'sessions' && req.method === 'GET' && id && sub === 'transcript-outcome') {
     return sendJson(res, 200, store.getTranscriptOutcome(id) || { status: null, error: null })
+  }
+
+  if (resource === 'sessions' && req.method === 'GET' && id && sub === 'files') {
+    return sendJson(res, 200, store.getFileChanges(id))
+  }
+
+  if (resource === 'sessions' && req.method === 'GET' && id && sub === 'content') {
+    const key = query.key
+    if (!key) return sendJson(res, 400, { error: 'missing_key' })
+    const value = await store.getContent(id, key)
+    if (value == null) return sendJson(res, 404, { error: 'not_found' })
+    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' })
+    return res.end(value)
   }
 
   if (resource === 'sessions' && req.method === 'GET' && id && sub === 'export') {

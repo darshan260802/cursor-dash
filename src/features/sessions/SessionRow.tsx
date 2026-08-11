@@ -1,12 +1,17 @@
 import { Link } from "react-router"
 import type { SessionSummary } from "@/lib/types"
 import { Badge } from "@/components/ui/badge"
+import { LiveBadge } from "@/components/LiveBadge"
+import { useLiveState } from "@/lib/api"
 import { formatRelativeTime } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { AlertTriangle, GitBranch } from "lucide-react"
 
 export function SessionRow({ session, active }: { session: SessionSummary; active: boolean }) {
   const hasName = !!(session.name || session.subtitle)
+  const { data: live } = useLiveState()
+  const isLive = live?.isGenerating && live.sessionId === session.id
+
   return (
     <Link
       to={`/sessions/${session.id}`}
@@ -19,6 +24,7 @@ export function SessionRow({ session, active }: { session: SessionSummary; activ
         <Badge variant={session.mode === "agent" ? "amber" : "iris"} className="shrink-0">
           {session.mode}
         </Badge>
+        {isLive && <LiveBadge />}
         <span className={cn("min-w-0 flex-1 truncate text-sm font-medium", !hasName && "text-muted-foreground italic")}>
           {session.name || session.subtitle || "Untitled session"}
         </span>

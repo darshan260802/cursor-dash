@@ -8,12 +8,14 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { openDb } from './sqlite.js'
+import { openDb, invalidateSnapshot } from './sqlite.js'
 import { discoverProfiles, profileSources, exists, configFile, configDir } from './paths.js'
 import * as sessionsScan from './scan/sessions.js'
 import * as bubblesScan from './scan/bubbles.js'
 import { scanWorkspaces, workspaceIndexFromScan } from './scan/workspaces.js'
-import { indexTranscripts, readTranscript, transcriptOutcome } from './scan/transcripts.js'
+import { indexTranscripts, readTranscript, transcriptOutcome, buildToolInputQueues } from './scan/transcripts.js'
+import { indexInlineDiffs } from './scan/inlineDiffs.js'
+import { readContent, readOfsContent } from './scan/content.js'
 import { scanAiTracking } from './scan/aiTracking.js'
 import { searchConversations } from './scan/search.js'
 import * as N from './normalize.js'
@@ -30,6 +32,57 @@ function loadJsonSafe(file, fallback) {
   } catch {
     return fallback
   }
+}
+
+const MAX_PLAUSIBLE_TOOL_DURATION_MS = 30 * 60_000 // 30 minutes
+
+/** Cursor records when a tool call started but never when it finished.
+ * The gap to the *next* message's `createdAt` (a new bubble is only
+ * created once the tool's result comes back) is the closest available
+ * proxy — capped generously so a long thinking pause before the next
+ * message doesn't masquerade as tool runtime. */
+function backfillToolDurations(messages) {
+  for (let i = 0; i < messages.length; i++) {
+    const tool = messages[i].toolCalls[0]
+    if (!tool) continue
+    const next = messages[i + 1]
+    if (!messages[i].createdAt || !next?.createdAt) continue
+    const start = new Date(messages[i].createdAt).getTime()
+    const end = new Date(next.createdAt).getTime()
+    const durationMs = end - start
+    if (durationMs >= 0 && durationMs <= MAX_PLAUSIBLE_TOOL_DURATION_MS) tool.durationMs = durationMs
+  }
+}
+
+/** Joins `originalFileStates` (Cursor's per-file "did we create it, what's
+ * the pre-edit content key" record) against every edit-kind tool call that
+ * touched that path, so the Changes tab can show one row per file rather
+ * than one row per tool call. */
+function buildFileChanges(detail, allToolCalls) {
+  const editsByPath = new Map()
+  for (const t of allToolCalls) {
+    if (t.kind !== 'edit' || !t.detail?.path) continue
+    if (!editsByPath.has(t.detail.path)) editsByPath.set(t.detail.path, [])
+    editsByPath.get(t.detail.path).push(t)
+  }
+
+  const originalFileStates = detail.originalFileStates || {}
+  const paths = new Set([...Object.keys(originalFileStates), ...editsByPath.keys()])
+
+  return [...paths].map((filePath) => {
+    const edits = editsByPath.get(filePath) || []
+    const ofs = originalFileStates[filePath] || null
+    return {
+      path: filePath,
+      isNewlyCreated: ofs?.isNewlyCreated ?? (edits.length > 0 && !ofs),
+      editCount: edits.length,
+      added: edits.reduce((n, e) => n + (e.detail?.added || 0), 0),
+      removed: edits.reduce((n, e) => n + (e.detail?.removed || 0), 0),
+      beforeContentId: edits[0]?.detail?.beforeContentId ?? null,
+      afterContentId: edits[edits.length - 1]?.detail?.afterContentId ?? null,
+      ofsContentKey: ofs?.contentKey ?? null,
+    }
+  })
 }
 
 function extOf(filePath) {
@@ -56,6 +109,7 @@ export class Store {
     this.listeners = new Set()
 
     this._detailReuse = new Map() // id -> { recency, session, messages }
+    this._toolBreakdownCache = null
   }
 
   onChange(fn) {
@@ -133,9 +187,34 @@ export class Store {
     await this.refresh()
   }
 
+  /** User-triggered refresh (the sidebar/topbar button). Forces every
+   * snapshot to be re-copied and every session re-read, rather than
+   * trusting the mtime/size fingerprint — the honest response to someone
+   * explicitly asking "is this current?". */
+  async forceRefresh() {
+    for (const profile of this.profiles) {
+      const sources = profileSources(profile)
+      invalidateSnapshot(sources.globalStateDb)
+      invalidateSnapshot(sources.aiTrackingDb)
+      invalidateSnapshot(sources.conversationSearchDb)
+    }
+    this._detailReuse.clear()
+    await this.refresh()
+  }
+
   /** Full rebuild. Cheap in practice: each session is only re-read from
-   * disk when its header's `recency` stamp has actually moved. */
+   * disk when its header's `recency` stamp has actually moved. Concurrent
+   * callers (the poll-based watcher and a user-triggered refresh landing
+   * at the same moment) share one in-flight run rather than racing. */
   async refresh() {
+    if (this.refreshing) return this.refreshing
+    this.refreshing = this._doRefresh().finally(() => {
+      this.refreshing = null
+    })
+    return this.refreshing
+  }
+
+  async _doRefresh() {
     this.profiles = discoverProfiles(this.dataDir)
     const health = []
     const workspaceActivityRaw = []
@@ -158,15 +237,26 @@ export class Store {
     const nextSessions = []
     const nextMeta = new Map()
     const nextTranscriptIndex = new Map()
+    const nextMessagesById = new Map()
     let aiTracking = null
 
     for (const profile of this.profiles) {
       const sources = profileSources(profile)
+
+      // Built before the session loop (a directory scan, not a DB read) so
+      // each session can be cross-referenced against its own transcript —
+      // both to backfill any tool-call arg the DB copy left empty and to
+      // report the transcript's terminal status/error.
+      const tIndex = indexTranscripts(sources.projectsDir)
+      for (const [id, file] of tIndex) nextTranscriptIndex.set(id, file)
+
       const db = await openDb(sources.globalStateDb)
       health.push({ profile: profile.label, source: 'globalState', ok: !!db, path: sources.globalStateDb })
 
       if (db) {
         const headers = sessionsScan.readSessionHeaders(db)
+        const inlineDiffs = indexInlineDiffs(db)
+
         for (const header of headers) {
           if (header.composerId === 'empty-state-draft') continue // Cursor's scratch buffer, not a real session
 
@@ -205,6 +295,30 @@ export class Store {
               }
             }
 
+            backfillToolDurations(messages)
+            const allToolCalls = messages.flatMap((m) => m.toolCalls)
+
+            // Backfill any tool call whose DB-stored args came back empty
+            // from the raw agent transcript, when one exists for this session.
+            const transcriptFile = tIndex.get(header.composerId)
+            if (transcriptFile) {
+              const toolInputQueues = buildToolInputQueues(readTranscript(transcriptFile))
+              for (const t of allToolCalls) {
+                if (t.args != null) continue
+                const queue = toolInputQueues.get(t.name)
+                if (queue?.length) t.args = queue.shift()
+              }
+            }
+
+            // What Cursor actually applied to disk, when it differs from
+            // the tool call's own precomputed preview.
+            for (const t of allToolCalls) {
+              if (t.kind === 'edit' && t.id && inlineDiffs.has(t.id)) {
+                const applied = inlineDiffs.get(t.id)
+                t.detail = { ...t.detail, appliedDiffId: applied.diffId, appliedGenerationId: applied.generationUUID }
+              }
+            }
+
             enriched = M.enrichSession(detail, detail, messages, this.pricing)
             enriched.toolNames = [...new Set(messages.flatMap((m) => m.toolCalls.map((t) => t.name)))]
             enriched.fileExtensions = [
@@ -214,18 +328,17 @@ export class Store {
                   .filter(Boolean)
               ),
             ]
+            enriched.fileChanges = buildFileChanges(detail, allToolCalls)
           }
 
           nextReuse.set(cacheKey, { recency: header.recency, session: enriched, messages })
           nextSessions.push(enriched)
           nextMeta.set(header.composerId, { header, profile, sources, cacheKey })
-          this.messagesById.set(header.composerId, messages)
+          nextMessagesById.set(header.composerId, messages)
         }
         db.close()
       }
 
-      const tIndex = indexTranscripts(sources.projectsDir)
-      for (const [id, file] of tIndex) nextTranscriptIndex.set(id, file)
       health.push({
         profile: profile.label,
         source: 'agentTranscripts',
@@ -255,10 +368,12 @@ export class Store {
     this._detailReuse = nextReuse
     this.sessions = nextSessions
     this.sessionMeta = nextMeta
+    this.messagesById = nextMessagesById
     this.transcriptIndex = nextTranscriptIndex
     this.sourceHealth = health
     this.aiTracking = aiTracking
     this.lastRefreshedAt = Date.now()
+    this._toolBreakdownCache = null
 
     this.emitChange('all')
   }
@@ -284,7 +399,9 @@ export class Store {
 
   getMessages(id, query = {}) {
     const all = this.messagesById.get(id) || []
-    return paginate(all, query)
+    // A single Cursor session can run to several thousand bubbles; the
+    // default 500-item cap exists for listSessions()'s sake, not this.
+    return paginate(all, query, { maxLimit: 200_000 })
   }
 
   getTranscriptOutcome(id) {
@@ -292,6 +409,28 @@ export class Store {
     if (!file) return null
     const entries = readTranscript(file)
     return { ...transcriptOutcome(entries), entryCount: entries.length }
+  }
+
+  getFileChanges(id) {
+    return this.getSession(id)?.fileChanges || []
+  }
+
+  /** Lazily reads one content-addressed blob for a session — a full
+   * before/after file body — rather than inlining every touched file's
+   * complete text into the session payload on every load. `key` must be a
+   * `composer.content.<sha256>` or `ofsContent:…` row; anything else is
+   * rejected so this can't be used to fetch arbitrary `cursorDiskKV` rows. */
+  async getContent(id, key) {
+    if (!/^composer\.content\.[0-9a-f]+$/.test(key) && !key.startsWith('ofsContent:')) return null
+    const meta = this.sessionMeta.get(id)
+    if (!meta) return null
+    const db = await openDb(meta.sources.globalStateDb)
+    if (!db) return null
+    try {
+      return key.startsWith('ofsContent:') ? readOfsContent(db, key) : readContent(db, key)
+    } finally {
+      db.close()
+    }
   }
 
   getOverview() {
@@ -307,12 +446,71 @@ export class Store {
   }
 
   getToolBreakdown() {
-    const allMessages = [...this.messagesById.values()].flat()
-    return M.toolBreakdown(allMessages)
+    if (!this._toolBreakdownCache) {
+      const allMessages = [...this.messagesById.values()].flat()
+      this._toolBreakdownCache = M.toolBreakdown(allMessages)
+    }
+    return this._toolBreakdownCache
   }
 
   getContextPressure() {
     return M.contextPressure(this.sessions)
+  }
+
+  /** The session actively generating right now, if any — Cursor exposes
+   * this nowhere in its own UI. Preference order: a non-empty
+   * `generatingBubbleIds` (the strongest signal), then
+   * `isContinuationInProgress` (seen on some agent backends instead), then
+   * — so the page never looks broken the instant a turn ends — the most
+   * recently active session if it updated within the last 30s. */
+  getLiveState() {
+    const RECENT_WINDOW_MS = 30_000
+    const empty = {
+      sessionId: null,
+      isGenerating: false,
+      startedAt: null,
+      generatingBubbleIds: [],
+      queuedPrompts: [],
+      lastEventAt: this.lastRefreshedAt,
+    }
+
+    const generating = this.sessions.find((s) => (s.generatingBubbleIds || []).length > 0)
+    if (generating) {
+      return {
+        sessionId: generating.id,
+        isGenerating: true,
+        startedAt: generating.lastUpdatedAt ?? null,
+        generatingBubbleIds: generating.generatingBubbleIds,
+        queuedPrompts: generating.queuedPrompts || [],
+        lastEventAt: this.lastRefreshedAt,
+      }
+    }
+
+    const continuing = this.sessions.find((s) => s.isContinuationInProgress)
+    if (continuing) {
+      return {
+        sessionId: continuing.id,
+        isGenerating: true,
+        startedAt: continuing.lastUpdatedAt ?? null,
+        generatingBubbleIds: [],
+        queuedPrompts: continuing.queuedPrompts || [],
+        lastEventAt: this.lastRefreshedAt,
+      }
+    }
+
+    const mostRecent = this.sessions[0]
+    if (mostRecent?.lastUpdatedAt && Date.now() - mostRecent.lastUpdatedAt < RECENT_WINDOW_MS) {
+      return {
+        sessionId: mostRecent.id,
+        isGenerating: false,
+        startedAt: null,
+        generatingBubbleIds: [],
+        queuedPrompts: mostRecent.queuedPrompts || [],
+        lastEventAt: this.lastRefreshedAt,
+      }
+    }
+
+    return empty
   }
 
   getWorkspaces() {
@@ -365,13 +563,25 @@ export class Store {
     return hits
   }
 
-  /** Absolute paths currently backing the index, for the mtime watcher. */
+  /** Absolute paths currently backing the index, for the mtime watcher.
+   * Includes WAL/SHM siblings (the actual files a live Cursor write lands
+   * in) and every currently-indexed agent-transcript file, so a running
+   * agent turn — which only appends to its .jsonl — is noticed too. */
   watchTargets() {
     const targets = []
     for (const profile of this.profiles) {
       const sources = profileSources(profile)
-      targets.push(sources.globalStateDb, sources.globalStateDb + '-wal')
+      targets.push(
+        sources.globalStateDb,
+        sources.globalStateDb + '-wal',
+        sources.globalStateDb + '-shm',
+        sources.aiTrackingDb,
+        sources.aiTrackingDb + '-wal',
+        sources.conversationSearchDb,
+        sources.conversationSearchDb + '-wal'
+      )
     }
+    for (const file of this.transcriptIndex.values()) targets.push(file)
     return targets.filter(exists)
   }
 }

@@ -51,12 +51,64 @@ export interface MessageHeader {
   capabilityType: number | null
 }
 
+export type ToolKind = "edit" | "terminal" | "read" | "search" | "todo" | "web" | "generic"
+
+export interface DiffHunk {
+  type: "added" | "removed" | "unchanged" | string
+  content: string
+  oldLine: number | null
+  newLine: number | null
+}
+
+export interface EditToolDetail {
+  path: string | null
+  hunks: DiffHunk[]
+  added: number | null
+  removed: number | null
+  beforeContentId: string | null
+  afterContentId: string | null
+  appliedDiffId?: string
+  appliedGenerationId?: string
+}
+
+export interface TerminalToolDetail {
+  command: string | null
+  cwd: string | null
+  output: string | null
+  rejected: boolean
+  startedAtMs: number | null
+}
+
+export interface ReadToolDetail {
+  path: string | null
+  offset: number | null
+  limit: number | null
+  totalLinesInFile: number | null
+}
+
+export interface SearchToolDetail {
+  pattern: string | null
+  targetDirectory: string | null
+  matchCount: number
+  matches: string[]
+}
+
+export interface TodoToolDetail {
+  todos: Todo[]
+}
+
+export type ToolDetail = EditToolDetail | TerminalToolDetail | ReadToolDetail | SearchToolDetail | TodoToolDetail | null
+
 export interface ToolCall {
   id: string | null
   name: string
+  kind: ToolKind
   status: string
+  startedAtMs: number | null
+  durationMs: number | null
   args: unknown
   result: unknown
+  detail: ToolDetail
 }
 
 export interface CodeBlock {
@@ -71,6 +123,19 @@ export interface MessageError {
   [key: string]: unknown
 }
 
+export interface Attachment {
+  kind: string
+  label: string
+  path: string | null
+}
+
+export type MessageBlock =
+  | { kind: "thinking"; text: string; durationMs: number }
+  | { kind: "text"; text: string }
+  | ({ kind: "code" } & CodeBlock)
+  | { kind: "tool"; tool: ToolCall }
+  | { kind: "error"; error: MessageError }
+
 export interface Message {
   id: string
   sessionId: string
@@ -81,6 +146,8 @@ export interface Message {
   thinking: { text: string; durationMs: number } | null
   toolCalls: ToolCall[]
   codeBlocks: CodeBlock[]
+  blocks: MessageBlock[]
+  attachments: Attachment[]
   model: string | null
   modelSource?: "reported" | "inferred" | null
   tokens: { input: number; output: number; source: TokenSource }
@@ -115,6 +182,22 @@ export interface SessionSummary {
   model: string | null
 }
 
+export interface QueuedPrompt {
+  id: string
+  text: string
+}
+
+export interface FileChange {
+  path: string
+  isNewlyCreated: boolean
+  editCount: number
+  added: number
+  removed: number
+  beforeContentId: string | null
+  afterContentId: string | null
+  ofsContentKey: string | null
+}
+
 export interface SessionDetail extends SessionSummary {
   contextTokensUsed: number | null
   contextTokenLimit: number | null
@@ -133,6 +216,28 @@ export interface SessionDetail extends SessionSummary {
   cost: CostTotals
   toolNames: string[]
   fileExtensions: string[]
+  generatingBubbleIds: string[]
+  isContinuationInProgress: boolean
+  hasUnreadMessages: boolean
+  queuedPrompts: QueuedPrompt[]
+  attachments: Attachment[]
+  subagentIds: string[]
+  trackedGitRepos: string[]
+  activeCustomMode: string | null
+  forceMode: string | null
+  addedFiles: number
+  removedFiles: number
+  newlyCreatedFolders: string[]
+  fileChanges: FileChange[]
+}
+
+export interface LiveState {
+  sessionId: string | null
+  isGenerating: boolean
+  startedAt: number | null
+  generatingBubbleIds: string[]
+  queuedPrompts: QueuedPrompt[]
+  lastEventAt: number | null
 }
 
 export interface Paginated<T> {
@@ -237,11 +342,29 @@ export interface ScoredCommit {
   v2AiPercentage: string
 }
 
+export interface AiTrackingRollupEntry {
+  key: string
+  count: number
+  fileExtensions: string[]
+  models: string[]
+}
+
 export interface AiTracking {
   hashesByDay: { day: string; source: string; fileExtension: string | null; model: string | null; count: number }[]
   commits: ScoredCommit[]
-  summaries: { conversationId: string; title: string; tldr: string; model: string; mode: string; updatedAt: number }[]
+  summaries: {
+    conversationId: string
+    title: string
+    tldr: string
+    overview: string | null
+    summaryBullets: string | null
+    model: string
+    mode: string
+    updatedAt: number
+  }[]
   fileExtensionBreakdown: { extension: string; count: number }[]
+  byConversation: AiTrackingRollupEntry[]
+  byFile: AiTrackingRollupEntry[]
 }
 
 export interface PricingModelEntry {

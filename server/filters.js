@@ -97,8 +97,8 @@ export function applySessionFilters(sessions, query = {}) {
   return out
 }
 
-export function paginate(items, query = {}) {
+export function paginate(items, query = {}, { maxLimit = 500 } = {}) {
   const offset = Math.max(0, Number(query.offset) || 0)
-  const limit = Math.min(500, Math.max(1, Number(query.limit) || 50))
+  const limit = Math.min(maxLimit, Math.max(1, Number(query.limit) || 50))
   return { items: items.slice(offset, offset + limit), total: items.length, offset, limit }
 }

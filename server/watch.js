@@ -19,10 +19,20 @@ function signatureFor(targets) {
     .join('|')
 }
 
-export function startWatcher(store, { intervalMs = 1500 } = {}) {
+export function startWatcher(store, { activeIntervalMs = 750, idleIntervalMs = 1500 } = {}) {
   let stopped = false
   let timer = null
   let lastSignature = signatureFor(store.watchTargets())
+
+  function nextIntervalMs() {
+    // Poll faster while a turn is actively generating, so /live feels
+    // responsive; back off to the idle cadence the rest of the time.
+    try {
+      return store.getLiveState().isGenerating ? activeIntervalMs : idleIntervalMs
+    } catch {
+      return idleIntervalMs
+    }
+  }
 
   async function tick() {
     if (stopped) return
@@ -35,10 +45,10 @@ export function startWatcher(store, { intervalMs = 1500 } = {}) {
         console.error('[cursor-dash] live refresh failed:', err.message)
       }
     }
-    if (!stopped) timer = setTimeout(tick, intervalMs)
+    if (!stopped) timer = setTimeout(tick, nextIntervalMs())
   }
 
-  timer = setTimeout(tick, intervalMs)
+  timer = setTimeout(tick, nextIntervalMs())
 
   return function stopWatcher() {
     stopped = true
