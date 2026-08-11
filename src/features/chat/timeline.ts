@@ -26,6 +26,48 @@ export interface MessageItem {
 
 export type TimelineItem = TurnHeaderItem | MessageItem
 
+const ROW_CHROME_PX = 56 // avatar rail + vertical padding shared by every message row
+const LINE_PX = 20
+
+/** A rough per-block height guess, used only to seed the virtualizer's
+ * initial layout before it measures the real DOM — accuracy here trades
+ * off directly against scroll jank (a bad estimate means a large jump
+ * once the real height is measured), so it's worth being deliberate
+ * about which blocks default open vs. collapsed matches the actual
+ * components (EditToolCard/TodoToolCard default open, everything else
+ * default closed — see their `defaultOpen` props). */
+function estimateBlockHeight(block: Message["blocks"][number]): number {
+  switch (block.kind) {
+    case "thinking":
+      return 36 // collapsed by default
+    case "text":
+      return Math.min(400, LINE_PX * Math.ceil((block.text.length || 1) / 70))
+    case "code":
+      return 150
+    case "error":
+      return 50
+    case "tool": {
+      const t = block.tool
+      if (t.kind === "edit") {
+        const hunks = "hunks" in (t.detail ?? {}) ? (t.detail as { hunks?: unknown[] }).hunks?.length ?? 0 : 0
+        return 90 + Math.min(hunks, 12) * LINE_PX
+      }
+      if (t.kind === "todo") {
+        const todos = "todos" in (t.detail ?? {}) ? (t.detail as { todos?: unknown[] }).todos?.length ?? 0 : 0
+        return 50 + todos * 24
+      }
+      return 36 // collapsed by default: terminal, read, search, web, generic
+    }
+    default:
+      return 40
+  }
+}
+
+export function estimateMessageHeight(message: Message): number {
+  if (message.blocks.length === 0) return ROW_CHROME_PX + 20
+  return ROW_CHROME_PX + message.blocks.reduce((sum, b) => sum + estimateBlockHeight(b), 0)
+}
+
 export function buildTimeline(messages: Message[]): TimelineItem[] {
   const items: TimelineItem[] = []
   let turnIndex = -1

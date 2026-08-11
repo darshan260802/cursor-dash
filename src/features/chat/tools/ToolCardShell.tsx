@@ -35,12 +35,20 @@ export function ToolCardShell({
   const [open, setOpen] = useState(defaultOpen)
   const contentRef = useRef<HTMLDivElement>(null)
   const innerRef = useRef<HTMLDivElement>(null)
+  // This card lives inside a virtualized list — it mounts and unmounts
+  // every time it scrolls in and out of view, which would replay the
+  // "grow from 0" reveal on every single remount (visibly janking the
+  // scroll, worst when scrolling up re-mounts a run of open cards at
+  // once). Only animate on a real user toggle, not the first paint.
+  const hasMountedRef = useRef(false)
 
   useGSAP(() => {
     const el = contentRef.current
     const inner = innerRef.current
     if (!el || !inner || !children) return
-    if (prefersReducedMotion()) {
+    const skipAnimation = !hasMountedRef.current || prefersReducedMotion()
+    hasMountedRef.current = true
+    if (skipAnimation) {
       el.style.height = open ? "auto" : "0px"
       return
     }

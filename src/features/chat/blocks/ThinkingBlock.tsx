@@ -9,12 +9,18 @@ export function ThinkingBlock({ text, durationMs }: { text: string; durationMs: 
   const [open, setOpen] = useState(false)
   const contentRef = useRef<HTMLDivElement>(null)
   const innerRef = useRef<HTMLParagraphElement>(null)
+  // See ToolCardShell's identical guard: this block mounts/unmounts every
+  // time it scrolls in and out of view inside the virtualized chat, so
+  // only a real user toggle should animate — not every remount.
+  const hasMountedRef = useRef(false)
 
   useGSAP(() => {
     const el = contentRef.current
     const inner = innerRef.current
     if (!el || !inner) return
-    if (prefersReducedMotion()) {
+    const skipAnimation = !hasMountedRef.current || prefersReducedMotion()
+    hasMountedRef.current = true
+    if (skipAnimation) {
       el.style.height = open ? "auto" : "0px"
       return
     }

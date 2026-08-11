@@ -56,8 +56,16 @@ function DiffPanes({
   const lang = langFromPath(path)
 
   return (
-    <div className="grid max-h-[70vh] min-h-0 grid-cols-1 gap-3 overflow-auto sm:grid-cols-2">
-      <div className="flex min-h-0 flex-col gap-1.5">
+    // items-start: without it, CSS Grid's default `align-items: stretch`
+    // forces each pane to exactly the row height, and since CodeBlock's
+    // outer wrapper has `overflow-hidden`, its flex automatic min-height
+    // becomes 0 — so it silently shrinks and clips instead of growing
+    // past the row and letting *this* container's own overflow-auto
+    // scroll it. items-start lets each pane size to its real content, so
+    // this container's scrollHeight correctly exceeds max-h-[70vh] and
+    // actually scrolls.
+    <div className="grid max-h-[70vh] grid-cols-1 items-start gap-3 overflow-auto sm:grid-cols-2">
+      <div className="flex flex-col gap-1.5">
         <div className="text-[10px] font-medium tracking-wide text-muted-foreground uppercase">Before</div>
         {beforeContentId ? (
           before.isLoading ? (
@@ -69,7 +77,7 @@ function DiffPanes({
           <div className="rounded-md border border-dashed border-border p-3 text-xs text-muted-foreground">New file</div>
         )}
       </div>
-      <div className="flex min-h-0 flex-col gap-1.5">
+      <div className="flex flex-col gap-1.5">
         <div className="text-[10px] font-medium tracking-wide text-muted-foreground uppercase">After</div>
         {afterContentId ? (
           after.isLoading ? (

@@ -1,26 +1,20 @@
-import { useRef } from "react"
-import { useGSAP } from "@gsap/react"
-import gsap from "gsap"
 import { ListTodo, CheckSquare, Square, CircleDot } from "lucide-react"
 import type { TodoToolDetail, ToolCall } from "@/lib/types"
 import { ToolCardShell } from "./ToolCardShell"
-import { prefersReducedMotion } from "@/lib/motion"
 
 const STATUS_ICON: Record<string, typeof CheckSquare> = {
   completed: CheckSquare,
   in_progress: CircleDot,
 }
 
+/** No entrance animation here: this card lives inside a virtualized list
+ * and remounts every time it scrolls in and out of view, so a
+ * mount-triggered stagger would replay constantly while scrolling
+ * instead of playing once. */
 export function TodoToolCard({ tool }: { tool: ToolCall }) {
   const detail = tool.detail as TodoToolDetail | null
   const todos = detail?.todos ?? []
-  const listRef = useRef<HTMLUListElement>(null)
   const done = todos.filter((t) => t.status === "completed").length
-
-  useGSAP(() => {
-    if (!listRef.current || prefersReducedMotion()) return
-    gsap.from(listRef.current.children, { opacity: 0, x: -6, duration: 0.25, stagger: 0.04, ease: "power2.out" })
-  }, [])
 
   return (
     <ToolCardShell
@@ -39,7 +33,7 @@ export function TodoToolCard({ tool }: { tool: ToolCall }) {
       {todos.length === 0 ? (
         <p className="text-xs text-muted-foreground">No todos.</p>
       ) : (
-        <ul ref={listRef} className="flex flex-col gap-1.5">
+        <ul className="flex flex-col gap-1.5">
           {todos.map((t) => {
             const Icon = STATUS_ICON[t.status] ?? Square
             return (

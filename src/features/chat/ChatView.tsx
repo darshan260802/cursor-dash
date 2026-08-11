@@ -3,7 +3,7 @@ import { useVirtualizer } from "@tanstack/react-virtual"
 import gsap from "gsap"
 import { ArrowDown, MessageSquareDashed } from "lucide-react"
 import type { Message } from "@/lib/types"
-import { buildTimeline } from "./timeline"
+import { buildTimeline, estimateMessageHeight } from "./timeline"
 import { TurnHeader } from "./TurnHeader"
 import { UserMessage } from "./UserMessage"
 import { AssistantTurn } from "./AssistantTurn"
@@ -26,8 +26,16 @@ export function ChatView({ messages, live = false }: { messages: Message[]; live
   const virtualizer = useVirtualizer({
     count: timeline.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: (i) => (timeline[i]?.type === "turn" ? 36 : 140),
-    overscan: 8,
+    estimateSize: (i) => {
+      const item = timeline[i]
+      if (!item) return 60
+      return item.type === "turn" ? 36 : estimateMessageHeight(item.message)
+    },
+    // A generous overscan keeps rows above/below the viewport measured
+    // ahead of time, so scrolling — especially upward, where rows above
+    // re-mount and need fresh measurements — has fewer large corrections
+    // to make in view.
+    overscan: 15,
   })
 
   // A fresh inline ref callback on every render makes React detach/reattach
