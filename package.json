@@ -1,6 +1,6 @@
 {
   "name": "@darshanpatel2608/cursor-dash",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": false,
   "description": "A local, read-only dashboard for your Cursor IDE session history — chats, tool calls, tokens, and cost — served from your own machine.",
   "keywords": [
