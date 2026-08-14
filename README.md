@@ -9,6 +9,14 @@ A local, read-only dashboard for your [Cursor](https://cursor.com) session histo
 
 ## Install
 
+Run it directly, no install required:
+
+```sh
+npx @darshanpatel2608/cursor-dash@latest
+```
+
+Or install it globally to get a `cursor-dash` command:
+
 ```sh
 npm install --location=global @darshanpatel2608/cursor-dash
 ```
@@ -17,12 +25,6 @@ then run it from anywhere:
 
 ```sh
 cursor-dash
-```
-
-Or skip the install and run it directly:
-
-```sh
-npx @darshanpatel2608/cursor-dash
 ```
 
 Either way: it scans Cursor's local data stores, starts a server on `127.0.0.1`, and opens the dashboard in your browser.
@@ -68,7 +70,7 @@ cursor-dash [options]
   -v, --version       Show the version
 ```
 
-(`npx @darshanpatel2608/cursor-dash [options]` works the same way if you didn't install it globally.)
+(`npx @darshanpatel2608/cursor-dash@latest [options]` works the same way if you didn't install it globally.)
 
 ## Privacy
 
