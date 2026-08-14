@@ -19,19 +19,32 @@ function signatureFor(targets) {
     .join('|')
 }
 
-export function startWatcher(store, { activeIntervalMs = 750, idleIntervalMs = 1500 } = {}) {
+// How long to keep polling at the active cadence after the last detected
+// change, even once `isGenerating` itself has gone false. A turn ending
+// and a new one starting are both "changes" a user is watching for, and
+// sampling the very first tick of a new turn at the idle rate is exactly
+// the perceptible lag this file exists to avoid.
+const HOT_WINDOW_MS = 5_000
+
+export function startWatcher(store, { activeIntervalMs = 300, idleIntervalMs = 1000 } = {}) {
   let stopped = false
   let timer = null
   let lastSignature = signatureFor(store.watchTargets())
+  let lastChangeAt = 0
 
   function nextIntervalMs() {
-    // Poll faster while a turn is actively generating, so /live feels
-    // responsive; back off to the idle cadence the rest of the time.
+    // Poll faster while a turn is actively generating, or shortly after any
+    // change was seen, so /live feels responsive; back off to the idle
+    // cadence once things have been quiet for a while. The stat-based
+    // signature check this gates is sub-millisecond even against a large
+    // profile, so the cost of polling faster is negligible — it's purely a
+    // latency/CPU-wakeups tradeoff, and latency is what users notice.
     try {
-      return store.getLiveState().isGenerating ? activeIntervalMs : idleIntervalMs
+      if (store.getLiveState().isGenerating) return activeIntervalMs
     } catch {
-      return idleIntervalMs
+      /* fall through to the hot-window check below */
     }
+    return Date.now() - lastChangeAt < HOT_WINDOW_MS ? activeIntervalMs : idleIntervalMs
   }
 
   async function tick() {
@@ -39,6 +52,7 @@ export function startWatcher(store, { activeIntervalMs = 750, idleIntervalMs = 1
     const sig = signatureFor(store.watchTargets())
     if (sig !== lastSignature) {
       lastSignature = sig
+      lastChangeAt = Date.now()
       try {
         await store.refresh()
       } catch (err) {

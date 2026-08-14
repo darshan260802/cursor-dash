@@ -47,59 +47,66 @@ function snapshotBase(file) {
   return path.join(snapshotDir, `${hash}-${path.basename(file)}`)
 }
 
+const SUFFIXES = ['', '-wal', '-shm']
+
 /**
- * Fingerprint `file` and its -wal/-shm siblings (mtime + size each, or
- * `missing` when a sibling doesn't exist). Cursor runs SQLite in WAL mode,
- * so a live write lands in `-wal` and leaves the main file's own
- * mtime/size untouched until the next checkpoint — fingerprinting the main
- * file alone means a freshly-written session never gets re-snapshotted.
+ * Fingerprint one file (mtime + size, or `missing` if it doesn't exist).
  */
-function siblingSignature(file) {
-  return ['', '-wal', '-shm'].map((suffix) => {
-    try {
-      const st = fs.statSync(file + suffix)
-      return `${st.mtimeMs}:${st.size}`
-    } catch {
-      return 'missing'
-    }
-  })
+function fileSignature(file) {
+  try {
+    const st = fs.statSync(file)
+    return `${st.mtimeMs}:${st.size}`
+  } catch {
+    return 'missing'
+  }
 }
 
 /**
  * Copy `file` (and its -wal/-shm siblings, if present) into the snapshot
- * dir when the source (or either sibling) has changed since the last copy.
- * Returns the snapshot path, or null if the source doesn't exist.
+ * dir, but only the suffixes that actually changed since the last copy —
+ * fingerprinted independently. Cursor runs SQLite in WAL mode, so a live
+ * write almost always lands in `-wal` alone and leaves the main file's own
+ * mtime/size untouched until the next checkpoint; treating all three
+ * suffixes as one signature (as an earlier version of this function did)
+ * meant every `-wal`-only write re-copied the main file too — for a
+ * multi-hundred-MB `state.vscdb` that's real latency on every poll tick
+ * during a live session, paid for nothing. Returns the snapshot path, or
+ * null if the source doesn't exist.
  */
 function ensureSnapshot(file) {
   if (!exists(file)) return null
 
   const dest = snapshotBase(file)
   const metaFile = dest + '.meta.json'
-  const signature = siblingSignature(file)
-  let fresh = false
+  let meta = {}
   try {
-    const meta = JSON.parse(fs.readFileSync(metaFile, 'utf8'))
-    fresh = Array.isArray(meta.signature) && meta.signature.join('|') === signature.join('|')
+    meta = JSON.parse(fs.readFileSync(metaFile, 'utf8'))
   } catch {
-    fresh = false
+    meta = {}
   }
+  const priorSignature = meta.signature && typeof meta.signature === 'object' ? meta.signature : {}
+  const nextSignature = { ...priorSignature }
+  let changed = false
 
-  if (!fresh) {
-    for (const suffix of ['', '-wal', '-shm']) {
-      const s = file + suffix
-      const d = dest + suffix
+  for (const suffix of SUFFIXES) {
+    const sig = fileSignature(file + suffix)
+    if (sig === priorSignature[suffix]) continue
+    changed = true
+    nextSignature[suffix] = sig
+    const s = file + suffix
+    const d = dest + suffix
+    try {
+      fs.copyFileSync(s, d)
+    } catch {
       try {
-        fs.copyFileSync(s, d)
+        fs.unlinkSync(d)
       } catch {
-        try {
-          fs.unlinkSync(d)
-        } catch {
-          /* no sibling to clean up */
-        }
+        /* no sibling to clean up */
       }
     }
-    fs.writeFileSync(metaFile, JSON.stringify({ signature }))
   }
+
+  if (changed) fs.writeFileSync(metaFile, JSON.stringify({ signature: nextSignature }))
 
   return dest
 }

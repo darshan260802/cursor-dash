@@ -38,7 +38,7 @@ Either way: it scans Cursor's local data stores, starts a server on `127.0.0.1`,
 - **Analytics** — usage over time, model mix, tool call frequency and error rates, context pressure across every session.
 - **Code authorship** — AI vs. human lines per commit and per file extension, from Cursor's own AI-code-tracking database.
 - **Workspaces** — every project folder Cursor has run a session in, with rollups.
-- **Live updates** — the dashboard refreshes automatically as you use Cursor, via a small local change-stream.
+- **Live updates** — the dashboard refreshes automatically as you use Cursor, via a small local change feed.
 
 ## How it works
 
@@ -66,29 +66,55 @@ cursor-dash [options]
       --no-open      Don't open the dashboard in a browser
       --cloud        Enable the optional live Cursor usage sync (reads your local
                       Cursor auth token and calls cursor.com — off by default)
+      --share        Expose the dashboard on a public HTTPS URL via a free
+                      Cloudflare Quick Tunnel, gated by a one-time 8-character
+                      access code. Nothing to install or sign up for — the
+                      tunnel binary downloads itself on first use.
+      --share-url <u> Use a tunnel you already run (ngrok, tailscale funnel, a
+                      named cloudflared tunnel) instead of starting one; the
+                      access-code gate still applies.
   -h, --help          Show help
   -v, --version       Show the version
 ```
 
 (`npx @darshanpatel2608/cursor-dash@latest [options]` works the same way if you didn't install it globally.)
 
+## Sharing your dashboard
+
+`--share` is for a team lead who wants to watch a teammate's Cursor usage remotely: cursor-dash only ever reads the *host machine's* data, so the person whose usage is being watched runs the command, not the person watching. They start it with `cursor-dash --share`, get back a public URL and an 8-character code:
+
+```
+  Shared publicly at  https://random-words-here.trycloudflare.com
+  Access code         K7M2QX4P
+```
+
+and send both to whoever should see the dashboard. No account, no config, no port forwarding on either end — the tunnel is a free [Cloudflare Quick Tunnel](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/), set up automatically via [`untun`](https://github.com/unjs/untun).
+
+A few things worth knowing before you send that link:
+
+- **Anyone with the code has full access** — every session, transcript, and file diff on that machine, the same as sitting at the keyboard. There's no read-only mode. Don't share it with anyone you wouldn't hand your Cursor history to directly.
+- **The link and code are ephemeral.** Both are generated fresh every time you run `--share` and stop working the moment you `Ctrl-C` the process — nothing is written to disk.
+- **Quick Tunnels come with Cloudflare's own caveats:** no uptime SLA, a 200-concurrent-request ceiling, and they're explicitly meant for testing/development rather than production traffic. For casual team use this is a non-issue; for anything that needs to stay up reliably, run your own tunnel (ngrok, Tailscale Funnel, a named `cloudflared` tunnel) and pass its URL with `--share-url`.
+- Your own use at `http://127.0.0.1:<port>` is completely unaffected — the code is only ever required for requests arriving through the public URL.
+
 ## Privacy
 
-Everything runs on `127.0.0.1` and only accepts loopback requests. cursor-dash reads Cursor's local databases through snapshot copies — it never opens them for writing, never touches them mid-write — and by default nothing you type or that Cursor recorded ever leaves your machine. Two narrow, explicit exceptions, both plain outbound requests you trigger yourself:
+By default, everything runs on `127.0.0.1` and only accepts loopback requests — that stays true unless you explicitly pass `--share` or `--share-url`, which trade that guarantee for the public-URL-plus-code model described above. cursor-dash reads Cursor's local databases through snapshot copies — it never opens them for writing, never touches them mid-write — and nothing you type or that Cursor recorded leaves your machine on its own. Three narrow exceptions, all explicit opt-ins:
 
 - **Refresh pricing** (sidebar → Pricing → Refresh pricing) fetches Cursor's public pricing docs page to update the cost-estimate table. No account data is sent — it's the same request your browser makes loading that page.
 - **`--cloud`** enables an unofficial cursor.com usage endpoint that reads your local Cursor auth token. It's off by default and has to be started explicitly with that flag.
+- **`--share` / `--share-url`** puts the dashboard on a public URL, as above. Traffic to a Cloudflare Quick Tunnel is TLS-terminated at Cloudflare's edge like any other site behind Cloudflare.
 
 ## Development
 
 ```sh
 git clone https://github.com/darshan260802/cursor-dash.git
 cd cursor-dash
-npm install
-npm run dev         # Vite dev server on :5173, proxying /api to :7788
-npm run dev:server  # the API server, in another terminal
-npm run build        # builds dist/
-npm start             # runs the built app end-to-end (same as `cursor-dash`)
+bun install
+bun run dev         # Vite dev server on :5173, proxying /api to :7788
+bun run dev:server  # the API server, in another terminal
+bun run build        # builds dist/
+bun start             # runs the built app end-to-end (same as `cursor-dash`)
 ```
 
 ## License
