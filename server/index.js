@@ -67,6 +67,12 @@ function isLoopbackHost(hostHeader) {
 // behind a proxy that kills long-idle connections reconnects promptly.
 const LONG_POLL_TIMEOUT_MS = 25_000
 
+// Served even to an unauthenticated `--share` visitor — see the gate
+// branch below. Deliberately a tight, explicit allow-list rather than
+// "everything under dist/", even though nothing in the built bundle is
+// actually sensitive.
+const PUBLIC_ASSET_PATHS = new Set(['/logo.png'])
+
 /**
  * The HTTP app. `share`, when passed, is the gate created by
  * `share.js#createShareGate` for `--share` mode: it widens the host
@@ -94,6 +100,13 @@ export function createServer(store, { cloudEnabled = false, share = null } = {})
       }
 
       if (share && !share.isAuthorized(req)) {
+        // The gate page's own logo — not session data, nothing to protect
+        // by gating it, and gating it by accident would just be a broken
+        // image on the one page an unauthorized visitor is allowed to see.
+        if (PUBLIC_ASSET_PATHS.has(url.pathname)) {
+          await serveStatic(req, res, url.pathname)
+          return
+        }
         if (parts[0] === 'api') {
           sendJson(res, 401, { error: 'access_required' })
           return

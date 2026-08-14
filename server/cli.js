@@ -5,11 +5,13 @@
 
 import path from 'node:path'
 import fs from 'node:fs'
+import readline from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
 import { Store } from './cache.js'
 import { createServer } from './index.js'
 import { startWatcher } from './watch.js'
+import { formatCodeForDisplay } from './share.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'))
@@ -78,6 +80,77 @@ function openBrowser(url) {
   } catch {
     console.log(`  (couldn't auto-open a browser — visit ${url} manually)`)
   }
+}
+
+/** Best-effort clipboard copy, one OS command per platform (no dependency
+ * — same reasoning as openBrowser above). Resolves false rather than
+ * throwing when nothing suitable is available, so a caller can fall back
+ * to just telling the user to select the text themselves. */
+function copyToClipboard(text) {
+  return new Promise((resolve) => {
+    const platform = process.platform
+    const candidates =
+      platform === 'darwin'
+        ? [['pbcopy', []]]
+        : platform === 'win32'
+          ? [['clip', []]]
+          : [
+              ['wl-copy', []],
+              ['xclip', ['-selection', 'clipboard']],
+              ['xsel', ['--clipboard', '--input']],
+            ]
+
+    function tryNext(i) {
+      if (i >= candidates.length) return resolve(false)
+      const [command, cmdArgs] = candidates[i]
+      let child
+      try {
+        child = spawn(command, cmdArgs, { stdio: ['pipe', 'ignore', 'ignore'] })
+      } catch {
+        return tryNext(i + 1)
+      }
+      child.on('error', () => tryNext(i + 1))
+      child.on('exit', (code) => resolve(code === 0))
+      child.stdin.end(text)
+    }
+    tryNext(0)
+  })
+}
+
+/** Lets the person running `--share` press `c`/`s` to copy the access code
+ * or share URL without reaching for the mouse to select terminal text —
+ * both are one-shot secrets shown once per process, so a fast copy matters
+ * more here than in the rest of the CLI. Raw mode intercepts Ctrl-C from
+ * ever reaching Node as a SIGINT (the terminal driver's translation is
+ * exactly what raw mode disables), so Ctrl-C is handled explicitly here
+ * and routed to the same `shutdown` the SIGINT/SIGTERM handlers use —
+ * without this, the process would become unkillable by Ctrl-C the moment
+ * this listener attaches. No-ops entirely when stdin isn't a TTY (piped
+ * input, a non-interactive shell, some CI environments), where raw mode
+ * either fails or doesn't make sense. */
+function enableShareHotkeys({ code, publicUrl, shutdown }) {
+  if (!process.stdin.isTTY) return
+
+  readline.emitKeypressEvents(process.stdin)
+  process.stdin.setRawMode(true)
+  process.stdin.resume()
+
+  console.log('  press c to copy the access code, s to copy the share link\n')
+
+  process.stdin.on('keypress', async (_str, key) => {
+    if (!key) return
+    if (key.ctrl && key.name === 'c') {
+      shutdown()
+      return
+    }
+    if (key.name === 'c') {
+      const ok = await copyToClipboard(code)
+      console.log(ok ? '  ✓ access code copied' : "  couldn't copy — no clipboard tool found")
+    } else if (key.name === 's') {
+      const ok = await copyToClipboard(publicUrl)
+      console.log(ok ? '  ✓ share link copied' : "  couldn't copy — no clipboard tool found")
+    }
+  })
 }
 
 function listenOnFreePort(server, startPort, host, attemptsLeft = 20) {
@@ -192,7 +265,7 @@ async function main() {
   }
   if (publicUrl) {
     console.log(`  Shared publicly at  ${publicUrl}`)
-    console.log(`  Access code         ${code}\n`)
+    console.log(`  Access code         ${formatCodeForDisplay(code)}\n`)
     console.log('  Send both to whoever should see this dashboard. The link and code are new')
     console.log('  every time you start cursor-dash, and both stop working when you stop it.')
     console.log('  Anyone with them can read every session, transcript and file diff on this')
@@ -212,6 +285,8 @@ async function main() {
   }
   process.on('SIGINT', shutdown)
   process.on('SIGTERM', shutdown)
+
+  if (publicUrl) enableShareHotkeys({ code, publicUrl, shutdown })
 }
 
 main().catch((err) => {

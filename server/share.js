@@ -25,6 +25,13 @@ export function generateCode() {
   return out
 }
 
+/** "H6S8SGA7" -> "H6S8-SGA7" — purely a display convenience (the CLI
+ * banner, the gate page's boxes); `normalizeCode` strips the hyphen right
+ * back out, so a code copied with or without it always verifies. */
+export function formatCodeForDisplay(code) {
+  return `${code.slice(0, 4)}-${code.slice(4)}`
+}
+
 function normalizeCode(input) {
   return String(input || '')
     .trim()
@@ -166,9 +173,30 @@ export function createShareGate({ code }) {
   return { addAllowedHost, isAllowedHost, isOwnerRequest, isAuthorized, verify, tokenCookie }
 }
 
+// The actual app logo (public/logo.png — the same file Sidebar.tsx, the
+// About modal, and the splash screen all use), referenced by URL rather
+// than inlined: it's a 421KB raster, too heavy to base64 into every
+// gate-page response. index.js carries a narrow, explicit bypass so this
+// one path is served even to an unauthenticated request — it's the app's
+// static branding image, not session data, so there's nothing to protect
+// by gating it, and gating it by accident would just show a broken image.
+// (favicon.svg, despite the name, is unused Vite template scaffolding —
+// not the real brand mark — so it's deliberately not used here.)
+
 /** Self-contained gate page — no dependency on `dist/` having been built,
  * and no client-side framework, so it works even if the SPA bundle isn't
- * present. Posts the code to /api/access and reloads on success. */
+ * present. Posts the code to /api/access and reloads on success.
+ *
+ * Visually this mirrors the main app's actual design tokens (the same
+ * oklch values, radius scale, and type stack as `src/index.css`'s `.dark`
+ * block — the app defaults to dark regardless of OS preference, so this
+ * does too) rather than an unrelated hand-picked palette. The access-code
+ * field imitates shadcn/ui's `input-otp` component — 8 boxed slots in two
+ * groups of 4 — using the same technique that component itself uses under
+ * the hood: one real `<input>` (for typing, paste, and mobile keyboards)
+ * rendered invisibly on top of styled slot `<div>`s that mirror its value.
+ * It can't be the actual React component without pulling a build step into
+ * this otherwise-static page, so this reproduces its behavior directly. */
 export function renderGatePage({ error = false } = {}) {
   return `<!doctype html>
 <html lang="en">
@@ -176,42 +204,108 @@ export function renderGatePage({ error = false } = {}) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
-<title>cursor-dash — enter access code</title>
+<title>Cursor Dash — Enter access code</title>
 <style>
-  :root { color-scheme: dark; }
+  :root {
+    color-scheme: dark;
+    --background: oklch(0.1091 0.0091 301.6956);
+    --foreground: oklch(0.9838 0.0035 247.8583);
+    --card: oklch(0.1376 0.0118 301.0607);
+    --border: oklch(0.2505 0.0293 299.5707);
+    --input: oklch(0.2505 0.0293 299.5707);
+    --muted-foreground: oklch(0.7497 0.0224 301.0128);
+    --amber: #F2A65A;
+    --coral: #F2668B;
+    --primary-foreground: oklch(0.1091 0.0091 301.6956);
+    --radius: 1rem;
+    --font-sans: "Plus Jakarta Sans", Inter, system-ui, sans-serif;
+    --font-heading: "Bricolage Grotesque Variable", var(--font-sans);
+    --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  }
   * { box-sizing: border-box; }
   body {
     margin: 0; min-height: 100dvh; display: flex; align-items: center; justify-content: center;
-    background: #14121a; color: #f2f0f6;
-    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif;
+    background: var(--background); color: var(--foreground);
+    font: 15px/1.5 var(--font-sans); letter-spacing: -0.01em;
     padding: 24px;
   }
   .card {
-    width: 100%; max-width: 360px; background: #1e1b26; border: 1px solid #322d3d;
-    border-radius: 16px; padding: 28px; box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+    width: 100%; max-width: 380px; background: var(--card); border: 1px solid var(--border);
+    border-radius: calc(var(--radius) * 1.5); padding: 32px 28px;
+    box-shadow: 0 20px 40px -10px rgb(0 0 0 / 0.5);
   }
-  h1 { font-size: 16px; font-weight: 600; margin: 0 0 4px; }
-  p { color: #a49cb5; font-size: 13px; margin: 0 0 20px; }
-  input {
-    width: 100%; font: 20px/1.2 "JetBrains Mono", ui-monospace, monospace; letter-spacing: 0.2em;
-    text-align: center; text-transform: uppercase; padding: 12px; border-radius: 10px;
-    border: 1px solid #3a3448; background: #14121a; color: #f2f0f6; outline: none;
+  .brand { display: flex; align-items: center; gap: 10px; margin: 0 0 6px; }
+  .brand img { width: 34px; height: 34px; flex-shrink: 0; border-radius: calc(var(--radius) * 0.5); object-fit: cover; }
+  .brand span {
+    font-family: var(--font-heading); font-size: 21px; font-weight: 700;
+    letter-spacing: -0.02em; color: var(--foreground);
   }
-  input:focus { border-color: #f2a65a; }
+  p.desc { color: var(--muted-foreground); font-size: 13px; margin: 0 0 22px; }
+
+  /* OTP field: a real input, sized to cover the slot row exactly, with its
+     own text made invisible (transparent color, no caret) so only the
+     rendered slots underneath show — the input still receives every
+     keystroke, paste, and screen-reader interaction normally. */
+  .otp { position: relative; width: 100%; height: 52px; }
+  .otp input {
+    position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; padding: 0;
+    border: 0; outline: none; background: transparent; color: transparent;
+    caret-color: transparent; font: 20px var(--font-mono); letter-spacing: 0;
+    text-transform: uppercase;
+  }
+  /* The real input's text sits at its natural (left-packed, monospace)
+     width, not stretched to match the widely-gapped boxes below it — that
+     mismatch is invisible in the ordinary case (color: transparent), but a
+     native text-selection highlight ignores color and paints its own
+     system color regardless, revealing a gray patch over roughly the
+     first few boxes whenever the value is selected (e.g. focus+select()
+     after a failed attempt, or the user dragging to select). Neutralizing
+     ::selection here keeps the visible-slot illusion intact either way. */
+  .otp input::selection { background: transparent; color: transparent; }
+  .otp input::-moz-selection { background: transparent; color: transparent; }
+  /* No align-items here — the default (stretch) is load-bearing: it's what
+     makes .otp-group (and via its height:100%, every .otp-slot) actually
+     fill the row's height instead of collapsing to their own content
+     height, which for an empty slot is ~0. .otp-sep opts back out with its
+     own align-self so the divider stays a thin line, not full height. */
+  .otp-slots { position: absolute; inset: 0; display: flex; gap: 7px; pointer-events: none; }
+  .otp-group { display: flex; gap: 7px; flex: 1; height: 100%; }
+  .otp-slot {
+    flex: 1; height: 100%; display: flex; align-items: center; justify-content: center;
+    font-family: var(--font-mono); font-size: 19px; font-weight: 500;
+    border: 1px solid var(--input); background: color-mix(in oklab, var(--input) 35%, transparent);
+    border-radius: calc(var(--radius) * 0.7); color: var(--foreground);
+    transition: border-color 120ms, box-shadow 120ms;
+  }
+  .otp-slot.filled { border-color: color-mix(in oklab, var(--border), var(--foreground) 15%); }
+  .otp-slot.active { border-color: var(--amber); box-shadow: 0 0 0 3px color-mix(in oklab, var(--amber) 30%, transparent); }
+  .otp-sep { width: 10px; height: 1px; background: var(--border); flex-shrink: 0; align-self: center; }
+
   button {
-    width: 100%; margin-top: 12px; padding: 11px; border-radius: 10px; border: none;
-    background: #f2a65a; color: #1a1420; font-weight: 600; font-size: 14px; cursor: pointer;
+    width: 100%; margin-top: 16px; padding: 12px; border-radius: calc(var(--radius) * 0.9); border: none;
+    background: var(--amber); color: var(--primary-foreground); font-weight: 600; font-size: 14px; cursor: pointer;
+    font-family: var(--font-sans);
   }
   button:disabled { opacity: 0.6; cursor: default; }
-  .msg { min-height: 18px; margin-top: 10px; font-size: 12.5px; color: #f2668b; }
+  .msg { min-height: 18px; margin-top: 10px; font-size: 12.5px; color: var(--coral); }
 </style>
 </head>
 <body>
   <form class="card" id="gate" autocomplete="off">
-    <h1>cursor-dash</h1>
-    <p>Enter the 8-character access code shown in the terminal that started this dashboard.</p>
-    <input id="code" name="code" maxlength="8" inputmode="text" autocapitalize="characters"
-           autocomplete="off" spellcheck="false" placeholder="XXXXXXXX" autofocus>
+    <div class="brand"><img src="/logo.png" alt=""><span>Cursor Dash</span></div>
+    <p class="desc">Enter the 8-character access code shown in the terminal that started this dashboard.</p>
+
+    <div class="otp">
+      <input id="code" name="code" maxlength="9" inputmode="text" autocapitalize="characters"
+             autocomplete="one-time-code" spellcheck="false" autofocus
+             aria-label="8-character access code">
+      <div class="otp-slots" id="slots" aria-hidden="true">
+        <div class="otp-group" id="group1"></div>
+        <div class="otp-sep"></div>
+        <div class="otp-group" id="group2"></div>
+      </div>
+    </div>
+
     <button type="submit">Continue</button>
     <div class="msg" id="msg">${error ? 'Incorrect code. Try again.' : ''}</div>
   </form>
@@ -220,6 +314,37 @@ export function renderGatePage({ error = false } = {}) {
     const input = document.getElementById('code');
     const msg = document.getElementById('msg');
     const btn = form.querySelector('button');
+    const group1 = document.getElementById('group1');
+    const group2 = document.getElementById('group2');
+
+    // 8 slot divs, 4 per group — value characters map straight across;
+    // a hyphen (typed or pasted from the CLI's "XXXX-XXXX" display) is
+    // ignored for slot purposes but left in the underlying input value,
+    // same as the server-side normalization does.
+    const slots = [];
+    for (let i = 0; i < 8; i++) {
+      const el = document.createElement('div');
+      el.className = 'otp-slot';
+      (i < 4 ? group1 : group2).appendChild(el);
+      slots.push(el);
+    }
+
+    function render() {
+      const chars = input.value.toUpperCase().replace(/[^A-Z0-9]/g, '').split('');
+      const active = Math.min(chars.length, 7);
+      slots.forEach((slot, i) => {
+        slot.textContent = chars[i] || '';
+        slot.classList.toggle('filled', i < chars.length);
+        slot.classList.toggle('active', document.activeElement === input && i === active);
+      });
+    }
+    input.addEventListener('input', render);
+    input.addEventListener('focus', render);
+    input.addEventListener('blur', render);
+    slots.forEach((slot) => slot.style.pointerEvents = 'none');
+    document.querySelector('.otp').addEventListener('click', () => input.focus());
+    render();
+
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       btn.disabled = true;
@@ -242,6 +367,7 @@ export function renderGatePage({ error = false } = {}) {
         msg.textContent = 'Could not reach the server. Try again.';
       }
       btn.disabled = false;
+      input.focus();
       input.select();
     });
   </script>
