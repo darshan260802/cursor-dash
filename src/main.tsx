@@ -10,15 +10,17 @@ import Sessions from './routes/Sessions.tsx'
 import Analytics from './routes/Analytics.tsx'
 import CodeAuthorship from './routes/CodeAuthorship.tsx'
 import Workspaces from './routes/Workspaces.tsx'
+import Share from './routes/Share.tsx'
 
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       staleTime: 5_000,
-      // The SSE stream (useLiveUpdates) is the primary freshness signal;
-      // this interval is the safety net for when it's reconnecting or the
-      // browser throttled it in a background tab.
-      refetchInterval: 15_000,
+      // The long-poll change feed (useLiveUpdates) is the primary
+      // freshness signal and pushes near-instantly; this interval is just
+      // the safety net for when it's reconnecting or the browser throttled
+      // it in a background tab, so it can be generous.
+      refetchInterval: 60_000,
       refetchOnWindowFocus: true,
       retry: 1,
     },
@@ -38,6 +40,7 @@ createRoot(document.getElementById('root')!).render(
             <Route path="analytics" element={<Analytics />} />
             <Route path="code-authorship" element={<CodeAuthorship />} />
             <Route path="workspaces" element={<Workspaces />} />
+            <Route path="share" element={<Share />} />
           </Route>
         </Routes>
       </BrowserRouter>

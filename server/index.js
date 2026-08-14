@@ -8,6 +8,7 @@ import path from 'node:path'
 import http from 'node:http'
 import { fileURLToPath } from 'node:url'
 import { fetchCloudUsage } from './cloud.js'
+import { renderGatePage } from './share.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const distDir = path.join(__dirname, '..', 'dist')
@@ -51,43 +52,42 @@ async function readJsonBody(req) {
   return JSON.parse(Buffer.concat(chunks).toString('utf8'))
 }
 
-/** DNS-rebinding guard: only accept requests addressed to loopback. */
+/** DNS-rebinding guard for the non-`--share` path: only accept requests
+ * addressed to loopback. `--share` widens this to also allow the tunnel's
+ * own hostname — see share.js's `isAllowedHost`. */
 function isLoopbackHost(hostHeader) {
   if (!hostHeader) return false
   const host = hostHeader.split(':')[0]
   return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]'
 }
 
-export function createServer(store, { cloudEnabled = false } = {}) {
-  const sseClients = new Set()
-  const stopEmitter = store.onChange((scope) => {
-    const payload = `event: change\ndata: ${JSON.stringify({ scope, at: Date.now() })}\n\n`
-    for (const res of sseClients) {
-      try {
-        res.write(payload)
-      } catch {
-        /* client likely disconnected; will be cleaned up below */
-      }
-    }
-  })
+// How long a GET /api/changes request is held open waiting for something to
+// report before answering "nothing yet". Comfortably under Cloudflare's
+// Quick Tunnel idle timeout (~100s) and short enough that a client stuck
+// behind a proxy that kills long-idle connections reconnects promptly.
+const LONG_POLL_TIMEOUT_MS = 25_000
 
-  // Keeps the connection alive through proxies/dev servers that silently
-  // drop an idle SSE stream (the Vite dev proxy among them), and gives the
-  // client a beat to detect a dead connection and reconnect.
-  const heartbeat = setInterval(() => {
-    for (const res of sseClients) {
-      try {
-        res.write(': ping\n\n')
-      } catch {
-        /* client likely disconnected; will be cleaned up below */
-      }
-    }
-  }, 20_000)
-  heartbeat.unref()
+// Served even to an unauthenticated `--share` visitor — see the gate
+// branch below. Deliberately a tight, explicit allow-list rather than
+// "everything under dist/", even though nothing in the built bundle is
+// actually sensitive.
+const PUBLIC_ASSET_PATHS = new Set(['/logo.png'])
 
+/**
+ * The HTTP app. `share` is the controller created by
+ * `shareController.js#createShareController` — always present, whether or
+ * not a share is currently running. While inactive it behaves exactly like
+ * the old loopback-only, no-gate default (its `isAllowedHost`/`isAuthorized`
+ * degrade to that); once a share is started, it widens the host allow-list
+ * to the tunnel's hostname and requires either a loopback request (the
+ * owner) or a valid access-code session before anything past the gate page
+ * is served.
+ */
+export function createServer(store, { cloudEnabled = false, share } = {}) {
   const server = http.createServer(async (req, res) => {
-    if (!isLoopbackHost(req.headers.host)) {
-      sendText(res, 403, 'Forbidden: cursor-dash only accepts loopback requests.')
+    const allowedHost = share.isAllowedHost(req.headers.host)
+    if (!allowedHost) {
+      sendText(res, 403, 'Forbidden: cursor-dash only accepts requests addressed to a known host.')
       return
     }
 
@@ -96,20 +96,52 @@ export function createServer(store, { cloudEnabled = false } = {}) {
     const parts = url.pathname.split('/').filter(Boolean)
 
     try {
-      if (url.pathname === '/api/events') {
-        res.writeHead(200, {
-          'Content-Type': 'text/event-stream',
-          'Cache-Control': 'no-cache',
-          Connection: 'keep-alive',
-        })
-        res.write(': connected\n\n')
-        sseClients.add(res)
-        req.on('close', () => sseClients.delete(res))
+      if (share.isActive() && parts[0] === 'api' && parts[1] === 'access' && req.method === 'POST') {
+        await handleAccess(req, res, share)
+        return
+      }
+
+      if (!share.isAuthorized(req)) {
+        // The gate page's own logo — not session data, nothing to protect
+        // by gating it, and gating it by accident would just be a broken
+        // image on the one page an unauthorized visitor is allowed to see.
+        if (PUBLIC_ASSET_PATHS.has(url.pathname)) {
+          await serveStatic(req, res, url.pathname)
+          return
+        }
+        if (parts[0] === 'api') {
+          sendJson(res, 401, { error: 'access_required' })
+          return
+        }
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' })
+        res.end(renderGatePage())
+        return
+      }
+
+      // The Share page's own control surface — reachable only by the
+      // machine's owner (loopback Host + same-origin), never by a remote
+      // visitor who came in through the tunnel with the access code. This
+      // check happens even though such a visitor would already have
+      // passed the `isAuthorized` gate above: being *let in* to view the
+      // dashboard is not the same as being allowed to *manage* sharing
+      // itself (start/stop, see the code) or to have started the tunnel
+      // that let them in in the first place.
+      if (parts[0] === 'api' && parts[1] === 'share') {
+        if (!share.isOwnerRequest(req) || !isSameOriginRequest(req)) {
+          sendJson(res, 403, { error: 'forbidden' })
+          return
+        }
+        await handleShare(req, res, share, parts)
+        return
+      }
+
+      if (parts[0] === 'api' && parts[1] === 'changes' && req.method === 'GET') {
+        await handleChanges(req, res, store, query)
         return
       }
 
       if (parts[0] === 'api') {
-        await handleApi(req, res, { store, cloudEnabled, parts, query })
+        await handleApi(req, res, { store, cloudEnabled, share, parts, query })
         return
       }
 
@@ -120,24 +152,142 @@ export function createServer(store, { cloudEnabled = false } = {}) {
     }
   })
 
-  server.on('close', () => {
-    stopEmitter()
-    clearInterval(heartbeat)
-  })
   return server
 }
 
-async function handleApi(req, res, { store, cloudEnabled, parts, query }) {
+/** A page loaded from some other origin can still fire a same-site
+ * `fetch('http://127.0.0.1:<port>/api/share/start')` — the loopback Host
+ * check above passes for that just as readily as for the real dashboard,
+ * since both arrive addressed to the same host. This is the CSRF half of
+ * owner-only enforcement: it requires a custom header, which only
+ * same-origin JS can attach without tripping a CORS preflight this server
+ * never answers, and — when the browser sends one — an `Origin` that's
+ * itself loopback. A plain top-level navigation (no fetch, no custom
+ * header) never reaches these two mutating routes because it can't set
+ * `X-Cursor-Dash` either. */
+function isSameOriginRequest(req) {
+  if (req.headers['x-cursor-dash'] !== '1') return false
+  const origin = req.headers.origin
+  if (!origin) return true
+  try {
+    return isLoopbackHost(new URL(origin).host)
+  } catch {
+    return false
+  }
+}
+
+async function handleShare(req, res, share, parts) {
+  if (parts.length === 2 && req.method === 'GET') {
+    return sendJson(res, 200, share.status())
+  }
+  if (parts[2] === 'start' && req.method === 'POST') {
+    // Deliberately not awaited: the first run downloads the cloudflared
+    // binary, which can take well past any reasonable request timeout.
+    // The dashboard polls GET /api/share instead of waiting on this call.
+    share.start().catch(() => {})
+    return sendJson(res, 202, { state: 'starting' })
+  }
+  if (parts[2] === 'stop' && req.method === 'POST') {
+    await share.stop()
+    return sendJson(res, 200, share.status())
+  }
+  sendJson(res, 404, { error: 'not_found' })
+}
+
+async function handleAccess(req, res, share) {
+  // Unlike the rest of the API, this endpoint is reachable by an anonymous
+  // stranger with nothing but the tunnel URL, before they've proven
+  // anything — malformed input here shouldn't surface a 500.
+  let body
+  try {
+    body = await readJsonBody(req)
+  } catch {
+    sendJson(res, 400, { error: 'invalid_body' })
+    return
+  }
+  const result = await share.verify(req, body.code)
+  if (!result.ok) {
+    sendJson(res, 401, { error: 'invalid_code', reason: result.reason })
+    return
+  }
+  // Only mark the cookie Secure when we know the client reached us over
+  // HTTPS (the tunnel terminates TLS and forwards this header) — a bare
+  // `Secure` would make the cookie silently unusable for the owner's own
+  // plain-HTTP http://127.0.0.1 access.
+  const secure = req.headers['x-forwarded-proto'] === 'https'
+  res.setHeader('Set-Cookie', share.tokenCookie(result.token, { secure }))
+  sendJson(res, 200, { ok: true })
+}
+
+/** Long-poll change feed: answers immediately if `store.version` has moved
+ * past `since`, otherwise holds the request until something changes or
+ * `LONG_POLL_TIMEOUT_MS` elapses. Replaces the old SSE `/api/events`
+ * stream — plain request/response survives being proxied through a
+ * Cloudflare Quick Tunnel (which buffers SSE-over-GET until the
+ * connection closes, making it useless for this) and every other
+ * buffering intermediary, at the cost of one held connection per client
+ * instead of a push. */
+async function handleChanges(req, res, store, query) {
+  const since = Number(query.since)
+  const sinceVersion = Number.isFinite(since) && since >= 0 ? since : 0
+
+  const immediate = store.getChangesSince(sinceVersion)
+  if (immediate) {
+    sendJson(res, 200, immediate)
+    return
+  }
+
+  await new Promise((resolve) => {
+    let settled = false
+    let stopListening = () => {}
+    const timer = setTimeout(finish, LONG_POLL_TIMEOUT_MS)
+
+    function finish() {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      stopListening()
+      req.removeListener('close', onClose)
+      const payload = store.getChangesSince(sinceVersion) || {
+        version: store.version,
+        scopes: [],
+        changedSessionIds: [],
+      }
+      try {
+        sendJson(res, 200, payload)
+      } catch {
+        /* client disconnected between the change firing and us writing */
+      }
+      resolve()
+    }
+
+    function onClose() {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      stopListening()
+      resolve()
+    }
+
+    stopListening = store.onChange(finish)
+    req.on('close', onClose)
+  })
+}
+
+async function handleApi(req, res, { store, cloudEnabled, share, parts, query }) {
   // parts[0] === 'api'
   const [, resource, id, sub] = parts
 
   if (resource === 'meta' && req.method === 'GET') {
-    return sendJson(res, 200, store.getMeta())
+    // isOwner tells the frontend whether to show the Share nav item/page —
+    // cosmetic only, mirroring what /api/share/* already enforces server
+    // side, so a remote --share visitor never even sees the entry point.
+    return sendJson(res, 200, { ...store.getMeta(), isOwner: share.isOwnerRequest(req) })
   }
 
   if (resource === 'refresh' && req.method === 'POST') {
     await store.forceRefresh()
-    return sendJson(res, 200, store.getMeta())
+    return sendJson(res, 200, { ...store.getMeta(), isOwner: share.isOwnerRequest(req) })
   }
 
   if (resource === 'overview' && req.method === 'GET') {

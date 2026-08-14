@@ -13,13 +13,28 @@ import type {
   SessionDetail,
   SessionQuery,
   Message,
+  ShareStatus,
   TimelineBucket,
   ToolBreakdownEntry,
   WorkspaceActivity,
 } from "./types"
 
+/** In `--share` mode, a 401 means the gate no longer recognizes us — the
+ * session cookie expired, or the server was restarted with a fresh code.
+ * The only fix is re-entering the code, and the server already serves that
+ * page on a plain navigation, so the honest move is to go there rather
+ * than let every query on screen render as a broken error or spin
+ * forever. Never happens in the default (non-share) setup. */
+function handleUnauthorized(): never {
+  window.location.reload()
+  // The reload is async; throwing keeps this call (and anything awaiting
+  // it) from resolving with no data in the meantime.
+  throw new Error("access_required")
+}
+
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init)
+  if (res.status === 401) handleUnauthorized()
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
     throw new Error(body?.message || body?.error || `${res.status} ${res.statusText}`)
@@ -29,6 +44,7 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
 
 async function fetchText(url: string): Promise<string> {
   const res = await fetch(url)
+  if (res.status === 401) handleUnauthorized()
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
   return res.text()
 }
@@ -45,12 +61,37 @@ function qs(params: Record<string, unknown> = {}) {
 
 export type LiveConnectionStatus = "connecting" | "connected" | "reconnecting"
 
-/** Subscribe to the server's change stream and invalidate all queries on
- * every event — the whole dataset is small enough that a blanket
- * invalidation is simpler and cheap enough vs. tracking fine-grained scope.
- * Reconnects with backoff on drop (dev-server restarts, sleep/wake, a
- * proxy killing an idle connection) and reports honest connection status
- * rather than silently going quiet. */
+interface ChangesResponse {
+  version: number
+  scopes: string[]
+  changedSessionIds: string[]
+}
+
+// Maps a server-reported change scope to the query keys it can affect.
+// Keeping this list (rather than a blanket invalidateQueries() on every
+// tick, which is what an earlier version of this hook did) is what makes
+// live updates cheap on the session-detail and analytics pages — a change
+// to one session no longer refetches every other page's queries too.
+const SCOPE_QUERY_KEYS: Record<string, string[][]> = {
+  sessions: [["sessions"], ["overview"], ["timeline"], ["models"], ["tools"], ["context-pressure"], ["meta"]],
+  live: [["live"]],
+  workspaces: [["workspaces"]],
+  codeTracking: [["code-tracking"]],
+}
+
+/** Long-polls the server's change feed (`GET /api/changes?since=`) and
+ * invalidates exactly the query keys a reported change can affect —
+ * replacing what used to be a Server-Sent Events stream. SSE doesn't
+ * survive `--share`'s tunnel: Cloudflare's Quick Tunnels buffer
+ * SSE-over-GET until the connection closes, which makes push updates
+ * arrive only once the stream itself ends — so a plain long-poll is used
+ * everywhere, not just when sharing, rather than maintaining two
+ * transports. Latency is the same as SSE on localhost (the request
+ * resolves the instant the server has something to report), and every
+ * intermediary that buffers streaming responses works fine with it.
+ * Reconnects with backoff on a network error; a share session that's
+ * expired or been revoked (401) sends the browser to the access-code page
+ * instead of retrying forever. */
 export function useLiveUpdates() {
   const queryClient = useQueryClient()
   const [status, setStatus] = useState<LiveConnectionStatus>("connecting")
@@ -59,36 +100,78 @@ export function useLiveUpdates() {
   queryClientRef.current = queryClient
 
   useEffect(() => {
-    let source: EventSource | null = null
-    let reconnectTimer: ReturnType<typeof setTimeout> | null = null
-    let attempt = 0
     let stopped = false
+    let controller: AbortController | null = null
 
-    function connect() {
-      source = new EventSource("/api/events")
-      source.addEventListener("open", () => {
-        attempt = 0
-        setStatus("connected")
-      })
-      source.addEventListener("change", () => {
-        setLastEventAt(Date.now())
+    function invalidate(scopes: string[], changedSessionIds: string[]) {
+      if (scopes.includes("all")) {
+        // The server's honest fallback for a client that fell too far
+        // behind (e.g. a long-backgrounded tab) to reconstruct exactly
+        // what changed — same blanket behavior the old SSE handler always
+        // used, just no longer the common case.
         queryClientRef.current.invalidateQueries()
-      })
-      source.onerror = () => {
-        source?.close()
-        if (stopped) return
-        setStatus("reconnecting")
-        const delay = Math.min(1000 * 2 ** attempt, 15_000)
-        attempt += 1
-        reconnectTimer = setTimeout(connect, delay)
+        return
+      }
+      const invalidated = new Set<string>()
+      for (const scope of scopes) {
+        for (const key of SCOPE_QUERY_KEYS[scope] ?? []) {
+          const cacheKey = JSON.stringify(key)
+          if (invalidated.has(cacheKey)) continue
+          invalidated.add(cacheKey)
+          queryClientRef.current.invalidateQueries({ queryKey: key })
+        }
+      }
+      for (const id of changedSessionIds) {
+        queryClientRef.current.invalidateQueries({ queryKey: ["session", id] })
+        queryClientRef.current.invalidateQueries({ queryKey: ["session-messages", id] })
       }
     }
 
-    connect()
+    async function loop() {
+      let since = 0
+      let attempt = 0
+      let first = true
+
+      while (!stopped) {
+        controller = new AbortController()
+        try {
+          const res = await fetch(`/api/changes?since=${since}`, { signal: controller.signal })
+          if (stopped) return
+          if (res.status === 401) {
+            window.location.reload()
+            return
+          }
+          if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+
+          const data = (await res.json()) as ChangesResponse
+          attempt = 0
+          setStatus("connected")
+
+          if (data.version > since) {
+            since = data.version
+            // Skip invalidating on the very first response: it always
+            // reports "everything since 0", but the page just loaded with
+            // fresh data — there's nothing stale to refetch yet.
+            if (!first && data.scopes.length > 0) {
+              setLastEventAt(Date.now())
+              invalidate(data.scopes, data.changedSessionIds)
+            }
+          }
+          first = false
+        } catch (err) {
+          if (stopped || (err instanceof DOMException && err.name === "AbortError")) return
+          setStatus("reconnecting")
+          const delay = Math.min(1000 * 2 ** attempt, 15_000)
+          attempt += 1
+          await new Promise((resolve) => setTimeout(resolve, delay))
+        }
+      }
+    }
+
+    loop()
     return () => {
       stopped = true
-      source?.close()
-      if (reconnectTimer) clearTimeout(reconnectTimer)
+      controller?.abort()
     }
   }, [])
 
@@ -270,4 +353,38 @@ export function useRefreshPricingFromDocs() {
 
 export function sessionExportUrl(id: string, format: "json" | "md") {
   return `/api/sessions/${id}/export${qs({ format })}`
+}
+
+/** Required on every /api/share/* request — see server/index.js's
+ * isSameOriginRequest for why: a custom header forces a CORS preflight
+ * this server never answers, so a cross-origin page open in the same
+ * browser can't attach it, which is what keeps some other site's JS from
+ * silently starting or stopping a share via the loopback address. */
+const OWNER_HEADERS = { "X-Cursor-Dash": "1" }
+
+/** Polls faster while a tunnel is coming up (the first run downloads the
+ * cloudflared binary, which can take a while) and backs off once settled. */
+export function useShareStatus() {
+  return useQuery({
+    queryKey: ["share"],
+    queryFn: () => fetchJson<ShareStatus>("/api/share", { headers: OWNER_HEADERS }),
+    refetchInterval: (query) => (query.state.data?.state === "starting" ? 1000 : 15_000),
+  })
+}
+
+export function useStartShare() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () =>
+      fetchJson<{ state: "starting" }>("/api/share/start", { method: "POST", headers: OWNER_HEADERS }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["share"] }),
+  })
+}
+
+export function useStopShare() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => fetchJson<ShareStatus>("/api/share/stop", { method: "POST", headers: OWNER_HEADERS }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["share"] }),
+  })
 }

@@ -322,6 +322,21 @@ export interface Meta {
   sourceHealth: SourceHealth[]
   sessionCount: number
   lastRefreshedAt: number | null
+  // Whether this request came from the machine's own loopback address —
+  // false for a visitor who came in through a `--share` tunnel with the
+  // access code. Drives whether the Share nav item/page are shown; the
+  // server enforces the real restriction independently on /api/share/*.
+  isOwner: boolean
+}
+
+export type ShareState = "idle" | "starting" | "active" | "error"
+
+export interface ShareStatus {
+  state: ShareState
+  url: string | null
+  code: string | null
+  startedAt: number | null
+  error: string | null
 }
 
 export interface ScoredCommit {

@@ -36,6 +36,46 @@ function loadJsonSafe(file, fallback) {
 
 const MAX_PLAUSIBLE_TOOL_DURATION_MS = 30 * 60_000 // 30 minutes
 
+// How many recent refreshes' change-scopes we keep around, so a long-poll
+// client that missed a couple of ticks (a slow round trip, a backgrounded
+// tab) can still get the union of everything it missed instead of just the
+// latest one. A client further behind than this gets told to invalidate
+// everything — see Store#getChangesSince.
+const MAX_CHANGE_LOG = 50
+
+// Workspace/AI-tracking rollups aren't relevant to a live session update,
+// but a naive per-tick rescan opens every workspace's own state.vscdb.
+// Gate both behind a cheap signature and don't re-check more than this
+// often, so a thrashing workspace store can't drag down the hot path.
+const SIDE_SCAN_MIN_INTERVAL_MS = 10_000
+
+function fileSig(file) {
+  try {
+    const st = fs.statSync(file)
+    return `${st.mtimeMs}:${st.size}`
+  } catch {
+    return 'missing'
+  }
+}
+
+/** Cheap stand-in for "did anything in this workspace store change" —
+ * which folders exist and each one's state.vscdb fingerprint — cheap
+ * enough to check every tick, unlike actually opening every workspace DB
+ * (what `scanWorkspaces` does, and what this signature lets us skip). */
+function workspacesSignature(workspaceStorageDir) {
+  let entries
+  try {
+    entries = fs.readdirSync(workspaceStorageDir, { withFileTypes: true })
+  } catch {
+    return ''
+  }
+  return entries
+    .filter((e) => e.isDirectory())
+    .map((e) => `${e.name}:${fileSig(path.join(workspaceStorageDir, e.name, 'state.vscdb'))}`)
+    .sort()
+    .join('|')
+}
+
 /** Cursor records when a tool call started but never when it finished.
  * The gap to the *next* message's `createdAt` (a new bubble is only
  * created once the tool's result comes back) is the closest available
@@ -110,6 +150,12 @@ export class Store {
 
     this._detailReuse = new Map() // id -> { recency, session, messages }
     this._toolBreakdownCache = null
+
+    // Change feed for /api/changes (long-poll) — see _recordChange().
+    this.version = 0
+    this.changeLog = [] // [{ version, scopes, changedSessionIds }], oldest first
+    this._workspaceScanCache = new Map() // workspaceStorageDir -> { signature, at, entries }
+    this._aiTrackingScanState = null // { signature, at, data } | null
   }
 
   onChange(fn) {
@@ -125,6 +171,69 @@ export class Store {
         /* listener errors shouldn't break the refresh cycle */
       }
     }
+  }
+
+  /** Bumps the version and appends to the change log — but only when a
+   * refresh actually found something worth telling clients about. Most
+   * poll ticks find nothing changed at all (see the watcher's stat-based
+   * short-circuit); those must not bump the version, or /api/changes
+   * long-poll clients would wake up constantly for no reason. */
+  _recordChange(scopes, changedSessionIds) {
+    if (scopes.length === 0) return
+    this.version += 1
+    const entry = { version: this.version, scopes, changedSessionIds }
+    this.changeLog.push(entry)
+    if (this.changeLog.length > MAX_CHANGE_LOG) this.changeLog.shift()
+    this.emitChange(entry)
+  }
+
+  /** Union of every change since `since`, for a long-poll client reporting
+   * the last version it saw. If `since` predates everything still in the
+   * log (a slow client, a long-backgrounded tab), the safe answer is "treat
+   * it as if everything changed" rather than silently under-reporting. */
+  getChangesSince(since) {
+    if (since >= this.version) return null
+    if (this.changeLog.length === 0) return { version: this.version, scopes: [], changedSessionIds: [] }
+
+    const oldest = this.changeLog[0].version
+    if (since < oldest - 1) return { version: this.version, scopes: ['all'], changedSessionIds: [] }
+
+    const scopes = new Set()
+    const changedSessionIds = new Set()
+    for (const entry of this.changeLog) {
+      if (entry.version <= since) continue
+      for (const s of entry.scopes) scopes.add(s)
+      for (const id of entry.changedSessionIds) changedSessionIds.add(id)
+    }
+    return { version: this.version, scopes: [...scopes], changedSessionIds: [...changedSessionIds] }
+  }
+
+  /** Re-scans a profile's workspaceStorage only when its cheap signature
+   * has actually moved (or the last scan is stale past the rate-limit
+   * guard) — reuses the cached entries otherwise so a live-session refresh
+   * doesn't pay the cost of opening every workspace's own state.vscdb. */
+  async _scanWorkspacesIfNeeded(sources, now) {
+    const key = sources.workspaceStorageDir
+    const sig = workspacesSignature(key)
+    const cached = this._workspaceScanCache.get(key)
+    if (cached && (cached.signature === sig || now - cached.at < SIDE_SCAN_MIN_INTERVAL_MS)) {
+      return { changed: false, entries: cached.entries }
+    }
+    const entries = await scanWorkspaces(sources)
+    this._workspaceScanCache.set(key, { signature: sig, at: now, entries })
+    return { changed: true, entries }
+  }
+
+  /** Same idea as _scanWorkspacesIfNeeded, for the AI-code-tracking DB. */
+  async _scanAiTrackingIfNeeded(sources, now) {
+    const sig = fileSig(sources.aiTrackingDb)
+    const cached = this._aiTrackingScanState
+    if (cached && (cached.signature === sig || now - cached.at < SIDE_SCAN_MIN_INTERVAL_MS)) {
+      return { changed: false, data: cached.data }
+    }
+    const data = await scanAiTracking(sources)
+    this._aiTrackingScanState = { signature: sig, at: now, data }
+    return { changed: true, data }
   }
 
   applyPricingOverride() {
@@ -199,6 +308,11 @@ export class Store {
       invalidateSnapshot(sources.conversationSearchDb)
     }
     this._detailReuse.clear()
+    // Otherwise these would keep serving cached workspace/AI-tracking data
+    // whose *content* signature happens to match, defeating the "actually
+    // re-read everything" promise this method makes.
+    this._workspaceScanCache.clear()
+    this._aiTrackingScanState = null
     await this.refresh()
   }
 
@@ -215,14 +329,22 @@ export class Store {
   }
 
   async _doRefresh() {
+    // Snapshotted before anything below mutates `this.sessions` — the only
+    // way to know, at the end, what actually changed for this refresh.
+    const prevLive = this.getLiveState()
+    const prevSessionIds = new Set(this.sessions.map((s) => s.id))
+    const now = Date.now()
+
     this.profiles = discoverProfiles(this.dataDir)
     const health = []
     const workspaceActivityRaw = []
+    let workspacesChanged = false
 
     for (const profile of this.profiles) {
       const sources = profileSources(profile)
-      const ws = await scanWorkspaces(sources)
-      workspaceActivityRaw.push(...ws)
+      const scan = await this._scanWorkspacesIfNeeded(sources, now)
+      if (scan.changed) workspacesChanged = true
+      workspaceActivityRaw.push(...scan.entries)
       health.push({
         profile: profile.label,
         source: 'workspaceStorage',
@@ -238,7 +360,9 @@ export class Store {
     const nextMeta = new Map()
     const nextTranscriptIndex = new Map()
     const nextMessagesById = new Map()
+    const changedSessionIds = new Set()
     let aiTracking = null
+    let aiTrackingChanged = false
 
     for (const profile of this.profiles) {
       const sources = profileSources(profile)
@@ -329,6 +453,7 @@ export class Store {
               ),
             ]
             enriched.fileChanges = buildFileChanges(detail, allToolCalls)
+            changedSessionIds.add(header.composerId)
           }
 
           nextReuse.set(cacheKey, { recency: header.recency, session: enriched, messages })
@@ -359,7 +484,9 @@ export class Store {
       })
 
       if (!aiTracking) {
-        aiTracking = await scanAiTracking(sources)
+        const scan = await this._scanAiTrackingIfNeeded(sources, now)
+        aiTracking = scan.data
+        if (scan.changed) aiTrackingChanged = true
       }
     }
 
@@ -375,7 +502,23 @@ export class Store {
     this.lastRefreshedAt = Date.now()
     this._toolBreakdownCache = null
 
-    this.emitChange('all')
+    // A session gone from the next set (archived away, or its workspace
+    // vanished) is a change too — whoever has it open needs to know.
+    for (const id of prevSessionIds) {
+      if (!nextMeta.has(id)) changedSessionIds.add(id)
+    }
+
+    const scopes = new Set()
+    if (changedSessionIds.size > 0) scopes.add('sessions')
+    if (workspacesChanged) scopes.add('workspaces')
+    if (aiTrackingChanged) scopes.add('codeTracking')
+
+    const nextLive = this.getLiveState()
+    if (prevLive.sessionId !== nextLive.sessionId || prevLive.isGenerating !== nextLive.isGenerating) {
+      scopes.add('live')
+    }
+
+    this._recordChange([...scopes], [...changedSessionIds])
   }
 
   getMeta() {
