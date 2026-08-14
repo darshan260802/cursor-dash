@@ -77,6 +77,13 @@ export function dateInputToMs(value: string, bound: "start" | "end"): number | n
   return Number.isFinite(ms) ? ms : null
 }
 
+/** "H6S8SGA7" -> "H6S8-SGA7" — mirrors server/share.js's
+ * formatCodeForDisplay so the terminal banner and the Share page render
+ * the code identically. */
+export function formatAccessCode(code: string): string {
+  return `${code.slice(0, 4)}-${code.slice(4)}`
+}
+
 export function pathBasename(p: string | null): string | null {
   if (!p) return null
   const parts = p.split(/[\\/]/).filter(Boolean)

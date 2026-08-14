@@ -10,6 +10,7 @@ import Sessions from './routes/Sessions.tsx'
 import Analytics from './routes/Analytics.tsx'
 import CodeAuthorship from './routes/CodeAuthorship.tsx'
 import Workspaces from './routes/Workspaces.tsx'
+import Share from './routes/Share.tsx'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -39,6 +40,7 @@ createRoot(document.getElementById('root')!).render(
             <Route path="analytics" element={<Analytics />} />
             <Route path="code-authorship" element={<CodeAuthorship />} />
             <Route path="workspaces" element={<Workspaces />} />
+            <Route path="share" element={<Share />} />
           </Route>
         </Routes>
       </BrowserRouter>

@@ -13,6 +13,7 @@ import type {
   SessionDetail,
   SessionQuery,
   Message,
+  ShareStatus,
   TimelineBucket,
   ToolBreakdownEntry,
   WorkspaceActivity,
@@ -352,4 +353,38 @@ export function useRefreshPricingFromDocs() {
 
 export function sessionExportUrl(id: string, format: "json" | "md") {
   return `/api/sessions/${id}/export${qs({ format })}`
+}
+
+/** Required on every /api/share/* request — see server/index.js's
+ * isSameOriginRequest for why: a custom header forces a CORS preflight
+ * this server never answers, so a cross-origin page open in the same
+ * browser can't attach it, which is what keeps some other site's JS from
+ * silently starting or stopping a share via the loopback address. */
+const OWNER_HEADERS = { "X-Cursor-Dash": "1" }
+
+/** Polls faster while a tunnel is coming up (the first run downloads the
+ * cloudflared binary, which can take a while) and backs off once settled. */
+export function useShareStatus() {
+  return useQuery({
+    queryKey: ["share"],
+    queryFn: () => fetchJson<ShareStatus>("/api/share", { headers: OWNER_HEADERS }),
+    refetchInterval: (query) => (query.state.data?.state === "starting" ? 1000 : 15_000),
+  })
+}
+
+export function useStartShare() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () =>
+      fetchJson<{ state: "starting" }>("/api/share/start", { method: "POST", headers: OWNER_HEADERS }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["share"] }),
+  })
+}
+
+export function useStopShare() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => fetchJson<ShareStatus>("/api/share/stop", { method: "POST", headers: OWNER_HEADERS }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["share"] }),
+  })
 }

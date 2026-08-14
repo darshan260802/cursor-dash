@@ -74,16 +74,18 @@ const LONG_POLL_TIMEOUT_MS = 25_000
 const PUBLIC_ASSET_PATHS = new Set(['/logo.png'])
 
 /**
- * The HTTP app. `share`, when passed, is the gate created by
- * `share.js#createShareGate` for `--share` mode: it widens the host
- * allow-list to the tunnel's hostname and requires either a loopback
- * request (the owner) or a valid access-code session before anything past
- * the gate page is served. When `share` is null (the default), behavior is
- * unchanged from before — loopback-only, no gate.
+ * The HTTP app. `share` is the controller created by
+ * `shareController.js#createShareController` — always present, whether or
+ * not a share is currently running. While inactive it behaves exactly like
+ * the old loopback-only, no-gate default (its `isAllowedHost`/`isAuthorized`
+ * degrade to that); once a share is started, it widens the host allow-list
+ * to the tunnel's hostname and requires either a loopback request (the
+ * owner) or a valid access-code session before anything past the gate page
+ * is served.
  */
-export function createServer(store, { cloudEnabled = false, share = null } = {}) {
+export function createServer(store, { cloudEnabled = false, share } = {}) {
   const server = http.createServer(async (req, res) => {
-    const allowedHost = share ? share.isAllowedHost(req.headers.host) : isLoopbackHost(req.headers.host)
+    const allowedHost = share.isAllowedHost(req.headers.host)
     if (!allowedHost) {
       sendText(res, 403, 'Forbidden: cursor-dash only accepts requests addressed to a known host.')
       return
@@ -94,12 +96,12 @@ export function createServer(store, { cloudEnabled = false, share = null } = {})
     const parts = url.pathname.split('/').filter(Boolean)
 
     try {
-      if (share && parts[0] === 'api' && parts[1] === 'access' && req.method === 'POST') {
+      if (share.isActive() && parts[0] === 'api' && parts[1] === 'access' && req.method === 'POST') {
         await handleAccess(req, res, share)
         return
       }
 
-      if (share && !share.isAuthorized(req)) {
+      if (!share.isAuthorized(req)) {
         // The gate page's own logo — not session data, nothing to protect
         // by gating it, and gating it by accident would just be a broken
         // image on the one page an unauthorized visitor is allowed to see.
@@ -116,13 +118,30 @@ export function createServer(store, { cloudEnabled = false, share = null } = {})
         return
       }
 
+      // The Share page's own control surface — reachable only by the
+      // machine's owner (loopback Host + same-origin), never by a remote
+      // visitor who came in through the tunnel with the access code. This
+      // check happens even though such a visitor would already have
+      // passed the `isAuthorized` gate above: being *let in* to view the
+      // dashboard is not the same as being allowed to *manage* sharing
+      // itself (start/stop, see the code) or to have started the tunnel
+      // that let them in in the first place.
+      if (parts[0] === 'api' && parts[1] === 'share') {
+        if (!share.isOwnerRequest(req) || !isSameOriginRequest(req)) {
+          sendJson(res, 403, { error: 'forbidden' })
+          return
+        }
+        await handleShare(req, res, share, parts)
+        return
+      }
+
       if (parts[0] === 'api' && parts[1] === 'changes' && req.method === 'GET') {
         await handleChanges(req, res, store, query)
         return
       }
 
       if (parts[0] === 'api') {
-        await handleApi(req, res, { store, cloudEnabled, parts, query })
+        await handleApi(req, res, { store, cloudEnabled, share, parts, query })
         return
       }
 
@@ -134,6 +153,45 @@ export function createServer(store, { cloudEnabled = false, share = null } = {})
   })
 
   return server
+}
+
+/** A page loaded from some other origin can still fire a same-site
+ * `fetch('http://127.0.0.1:<port>/api/share/start')` — the loopback Host
+ * check above passes for that just as readily as for the real dashboard,
+ * since both arrive addressed to the same host. This is the CSRF half of
+ * owner-only enforcement: it requires a custom header, which only
+ * same-origin JS can attach without tripping a CORS preflight this server
+ * never answers, and — when the browser sends one — an `Origin` that's
+ * itself loopback. A plain top-level navigation (no fetch, no custom
+ * header) never reaches these two mutating routes because it can't set
+ * `X-Cursor-Dash` either. */
+function isSameOriginRequest(req) {
+  if (req.headers['x-cursor-dash'] !== '1') return false
+  const origin = req.headers.origin
+  if (!origin) return true
+  try {
+    return isLoopbackHost(new URL(origin).host)
+  } catch {
+    return false
+  }
+}
+
+async function handleShare(req, res, share, parts) {
+  if (parts.length === 2 && req.method === 'GET') {
+    return sendJson(res, 200, share.status())
+  }
+  if (parts[2] === 'start' && req.method === 'POST') {
+    // Deliberately not awaited: the first run downloads the cloudflared
+    // binary, which can take well past any reasonable request timeout.
+    // The dashboard polls GET /api/share instead of waiting on this call.
+    share.start().catch(() => {})
+    return sendJson(res, 202, { state: 'starting' })
+  }
+  if (parts[2] === 'stop' && req.method === 'POST') {
+    await share.stop()
+    return sendJson(res, 200, share.status())
+  }
+  sendJson(res, 404, { error: 'not_found' })
 }
 
 async function handleAccess(req, res, share) {
@@ -216,17 +274,20 @@ async function handleChanges(req, res, store, query) {
   })
 }
 
-async function handleApi(req, res, { store, cloudEnabled, parts, query }) {
+async function handleApi(req, res, { store, cloudEnabled, share, parts, query }) {
   // parts[0] === 'api'
   const [, resource, id, sub] = parts
 
   if (resource === 'meta' && req.method === 'GET') {
-    return sendJson(res, 200, store.getMeta())
+    // isOwner tells the frontend whether to show the Share nav item/page —
+    // cosmetic only, mirroring what /api/share/* already enforces server
+    // side, so a remote --share visitor never even sees the entry point.
+    return sendJson(res, 200, { ...store.getMeta(), isOwner: share.isOwnerRequest(req) })
   }
 
   if (resource === 'refresh' && req.method === 'POST') {
     await store.forceRefresh()
-    return sendJson(res, 200, store.getMeta())
+    return sendJson(res, 200, { ...store.getMeta(), isOwner: share.isOwnerRequest(req) })
   }
 
   if (resource === 'overview' && req.method === 'GET') {

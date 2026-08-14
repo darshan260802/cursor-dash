@@ -1,11 +1,13 @@
-// Auth for `--share`: an 8-character access code gate in front of the
-// public tunnel URL, plus the host allow-list that keeps a stray Host
-// header (or a DNS-rebinding attempt) from reaching the API.
+// Auth for sharing: an 8-character access code gate in front of the public
+// tunnel URL, plus the host allow-list that keeps a stray Host header (or a
+// DNS-rebinding attempt) from reaching the API. The gate itself is always
+// constructed (see shareController.js) but starts with no code, in which
+// case `isAuthorized` passes everything through — so the plain local path
+// (no share ever started) is unaffected in practice, it just goes through
+// the same code path instead of being skipped entirely.
 //
 // Deliberately separate from index.js so the request router stays a
-// router — everything code/session/rate-limit related lives here. When
-// cursor-dash isn't started with --share, none of this is imported or
-// constructed, so the plain local path is unaffected.
+// router — everything code/session/rate-limit related lives here.
 
 import crypto from 'node:crypto'
 
@@ -73,11 +75,14 @@ function parseCookies(req) {
 }
 
 /** Creates the share gate: host allow-list + code verification + session
- * tokens, all in memory. `code` is this process's one access code —
- * generated fresh per `cursor-dash --share` invocation and never written
- * to disk, so it (and every session issued against it) dies with the
- * process, same as the tunnel URL itself. */
-export function createShareGate({ code }) {
+ * tokens, all in memory. Starts with no code (inactive) unless one is
+ * passed — the gate can be activated and deactivated later via `setCode` /
+ * `clearCode`, which is what lets sharing be started and stopped at
+ * runtime from the dashboard rather than only at process launch. A code is
+ * never written to disk, so it (and every session issued against it) dies
+ * with the process at the latest, same as the tunnel URL itself. */
+export function createShareGate({ code = null } = {}) {
+  let currentCode = code
   const allowedHosts = new Set(['localhost', '127.0.0.1', '::1', '[::1]'])
   const tokens = new Map() // token -> expiresAt
   const failures = new Map() // clientKey -> { count, lockedUntil }
@@ -86,10 +91,42 @@ export function createShareGate({ code }) {
     return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]'
   }
 
+  function isActive() {
+    return currentCode != null
+  }
+
+  function setCode(newCode) {
+    currentCode = newCode
+  }
+
+  /** Deactivates the gate: clears the code (so `verify` fails closed),
+   * drops every issued session token, and restores the host allow-list to
+   * loopback-only. Leaves the local dashboard itself untouched — this is
+   * exactly the "stop sharing" operation, not a server shutdown. */
+  function clearCode() {
+    currentCode = null
+    tokens.clear()
+    allowedHosts.clear()
+    allowedHosts.add('localhost')
+    allowedHosts.add('127.0.0.1')
+    allowedHosts.add('::1')
+    allowedHosts.add('[::1]')
+  }
+
+  function revokeAllTokens() {
+    tokens.clear()
+  }
+
   /** Register the tunnel's public hostname once known (after the tunnel is
    * up), so requests forwarded through it pass the Host allow-list. */
   function addAllowedHost(host) {
     if (host) allowedHosts.add(host)
+  }
+
+  /** The counterpart to addAllowedHost — used when a stopped tunnel's
+   * hostname should no longer be treated as this dashboard's own. */
+  function removeAllowedHost(host) {
+    if (host) allowedHosts.delete(host)
   }
 
   function isAllowedHost(hostHeader) {
@@ -137,11 +174,12 @@ export function createShareGate({ code }) {
    * finds the tunnel URL. */
   async function verify(req, submittedCode) {
     const key = clientKey(req)
+    if (!currentCode) return { ok: false, reason: 'invalid' }
     if (isLockedOut(key)) return { ok: false, reason: 'locked' }
 
     await new Promise((resolve) => setTimeout(resolve, FAILURE_DELAY_MS))
 
-    if (!timingSafeEqualStr(normalizeCode(submittedCode), code)) {
+    if (!timingSafeEqualStr(normalizeCode(submittedCode), currentCode)) {
       recordFailure(key)
       console.log(`[cursor-dash] share: rejected access code from ${key}`)
       return { ok: false, reason: 'invalid' }
@@ -154,7 +192,12 @@ export function createShareGate({ code }) {
     return { ok: true, token }
   }
 
+  /** When the gate is inactive (no share running), every request is
+   * authorized — this is what lets a single always-present gate object
+   * serve both the plain local mode and an active `--share` session
+   * without the router needing to branch on which mode it's in. */
   function isAuthorized(req) {
+    if (!isActive()) return true
     return isOwnerRequest(req) || hasValidToken(req)
   }
 
@@ -170,7 +213,19 @@ export function createShareGate({ code }) {
     return parts.join('; ')
   }
 
-  return { addAllowedHost, isAllowedHost, isOwnerRequest, isAuthorized, verify, tokenCookie }
+  return {
+    addAllowedHost,
+    removeAllowedHost,
+    isAllowedHost,
+    isOwnerRequest,
+    isAuthorized,
+    verify,
+    tokenCookie,
+    isActive,
+    setCode,
+    clearCode,
+    revokeAllTokens,
+  }
 }
 
 // The actual app logo (public/logo.png — the same file Sidebar.tsx, the

@@ -1,9 +1,11 @@
+import { Fragment } from "react"
 import { NavLink } from "react-router"
 import { Moon, Sun, CircleDot } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useTheme } from "@/lib/theme"
 import { useMeta } from "@/lib/api"
 import { NAV } from "@/lib/nav"
+import { Separator } from "@/components/ui/separator"
 import { PricingSettings } from "@/components/PricingSettings"
 import { AboutModal } from "@/components/AboutModal"
 
@@ -21,22 +23,26 @@ export function Sidebar() {
       </div>
 
       <nav className="flex flex-1 flex-col gap-0.5 px-2">
-        {NAV.map(({ to, label, icon: Icon, end }) => (
-          <NavLink
-            key={to}
-            to={to}
-            end={end}
-            className={({ isActive }) =>
-              cn(
-                "flex items-center gap-2.5 rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
-                isActive && "bg-accent text-foreground"
-              )
-            }
-          >
-            <Icon className="size-4" strokeWidth={2} />
-            {label}
-          </NavLink>
-        ))}
+        {NAV.filter((item) => !item.ownerOnly || meta?.isOwner !== false).map(
+          ({ to, label, icon: Icon, end, dividerBefore }) => (
+            <Fragment key={to}>
+              {dividerBefore && <Separator className="my-2" />}
+              <NavLink
+                to={to}
+                end={end}
+                className={({ isActive }) =>
+                  cn(
+                    "flex items-center gap-2.5 rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
+                    isActive && "bg-accent text-foreground"
+                  )
+                }
+              >
+                <Icon className="size-4" strokeWidth={2} />
+                {label}
+              </NavLink>
+            </Fragment>
+          )
+        )}
       </nav>
 
       <div className="flex flex-col gap-2 border-t border-sidebar-border px-4 py-3">
